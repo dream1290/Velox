@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Velox
+GenericName=Video Player
+Comment=A fast, native Ubuntu video player built with GTK4 and GStreamer
+Exec=velox %U
+Icon=io.github.velox
+Terminal=false
+Categories=AudioVideo;Video;Player;GTK;
+MimeType=video/x-matroska;video/mp4;video/mpeg;video/quicktime;video/x-msvideo;video/x-flv;video/webm;video/ogg;video/x-ogm+ogg;video/x-theora+ogg;video/3gpp;video/3gpp2;audio/mpeg;audio/x-mp3;audio/flac;audio/x-flac;audio/ogg;audio/x-vorbis+ogg;audio/aac;audio/x-aac;audio/wav;audio/x-wav;audio/opus;application/x-subrip;text/x-ssa;
+StartupNotify=true
+StartupWMClass=velox
+Keywords=video;player;media;film;movie;music;audio;
+X-GNOME-UsesNotifications=false
