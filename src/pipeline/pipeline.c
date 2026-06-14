@@ -482,7 +482,8 @@ seek_thread_func (gpointer data)
 
             /* Take a ref on the pipeline while holding the lock.
              * This prevents the main thread from freeing the pipeline
-             * out from under us during the (potentially slow) seek. */
+             * out from under us during the (potentially slow) seek.
+             */
             GstElement *pipe = self->pipeline
                 ? gst_object_ref (self->pipeline) : NULL;
             self->seek_in_progress = TRUE;
@@ -491,7 +492,7 @@ seek_thread_func (gpointer data)
             if (pipe) {
                 gst_element_seek_simple (pipe,
                                          GST_FORMAT_TIME,
-                                         GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT,
+                                         GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT | GST_SEEK_FLAG_SKIP,
                                          target * GST_USECOND);
                 gst_object_unref (pipe);
             }
