@@ -38,3 +38,6 @@ deb-build/
 
 # Meson private data
 meson-private/
+
+# Generated GSchema
+data/gschemas.compiled

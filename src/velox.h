@@ -27,7 +27,6 @@
 #include "core/event_bus.h"
 #include "core/player.h"
 #include "core/playlist.h"
-#include "core/session.h"
 #include "core/plugin.h"
 
 /* ── Pipeline (L3) ─────────────────────────────────────────────────────────── */

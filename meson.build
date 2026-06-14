@@ -65,7 +65,6 @@ velox_sources = files(
   'src/core/player.c',
   'src/core/event_bus.c',
   'src/core/playlist.c',
-  'src/core/session.c',
   'src/core/plugin.c',
 
   # Pipeline (L3 — Media Engine)
