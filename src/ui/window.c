@@ -938,16 +938,16 @@ on_key_pressed (GtkEventControllerKey *ctrl,
         /* Brightness up (+0.05, max 1.0) */
         self->brightness = CLAMP (self->brightness + 0.05, -1.0, 1.0);
         vlx_player_set_brightness (self->player, self->brightness);
-        vlx_window_show_hud (self, g_strdup_printf ("\u2600 Brightness: %+.0f%%",
-                                                     self->brightness * 100));
+        vlx_window_show_hud (self, "\u2600 Brightness: %+.0f%%",
+                             self->brightness * 100);
         return TRUE;
     case GDK_KEY_KP_Subtract:
     case GDK_KEY_minus:
         /* Brightness down */
         self->brightness = CLAMP (self->brightness - 0.05, -1.0, 1.0);
         vlx_player_set_brightness (self->player, self->brightness);
-        vlx_window_show_hud (self, g_strdup_printf ("\u2600 Brightness: %+.0f%%",
-                                                     self->brightness * 100));
+        vlx_window_show_hud (self, "\u2600 Brightness: %+.0f%%",
+                             self->brightness * 100);
         return TRUE;
     case GDK_KEY_question:
         /* ? = keyboard cheat sheet */
