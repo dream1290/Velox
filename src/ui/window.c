@@ -262,40 +262,82 @@ vlx_window_setup_actions_and_menu (VlxWindow *self)
 
     /* — Media section — */
     GMenu *media = g_menu_new ();
-    g_menu_append (media, "Open File…",          "win.open-file");
-    g_menu_append (media, "Open Network Stream…","win.open-url");
+    GMenuItem *item_open_file = g_menu_item_new ("Open File…", "win.open-file");
+    g_menu_item_set_icon (item_open_file, g_themed_icon_new ("document-open-symbolic"));
+    g_menu_append_item (media, item_open_file);
+    g_object_unref (item_open_file);
+    GMenuItem *item_open_url = g_menu_item_new ("Open Network Stream…", "win.open-url");
+    g_menu_item_set_icon (item_open_url, g_themed_icon_new ("insert-link-symbolic"));
+    g_menu_append_item (media, item_open_url);
+    g_object_unref (item_open_url);
     g_menu_append_section (menu, NULL, G_MENU_MODEL (media));
     g_object_unref (media);
 
     /* — Playback section — */
     GMenu *playback = g_menu_new ();
-    g_menu_append (playback, "Play / Pause",      "win.play-pause");
-    g_menu_append (playback, "Stop",              "win.stop");
-    g_menu_append (playback, "A-B Loop",          "win.ab-loop");
-    g_menu_append (playback, "Reset Speed",       "win.speed-reset");
+    GMenuItem *item_play_pause = g_menu_item_new ("Play / Pause", "win.play-pause");
+    g_menu_item_set_icon (item_play_pause, g_themed_icon_new ("media-playback-start-symbolic"));
+    g_menu_append_item (playback, item_play_pause);
+    g_object_unref (item_play_pause);
+    GMenuItem *item_stop = g_menu_item_new ("Stop", "win.stop");
+    g_menu_item_set_icon (item_stop, g_themed_icon_new ("media-playback-stop-symbolic"));
+    g_menu_append_item (playback, item_stop);
+    g_object_unref (item_stop);
+    GMenuItem *item_ab_loop = g_menu_item_new ("A-B Loop", "win.ab-loop");
+    g_menu_item_set_icon (item_ab_loop, g_themed_icon_new ("media-playlist-repeat-symbolic"));
+    g_menu_append_item (playback, item_ab_loop);
+    g_object_unref (item_ab_loop);
+    GMenuItem *item_speed_reset = g_menu_item_new ("Reset Speed", "win.speed-reset");
+    g_menu_item_set_icon (item_speed_reset, g_themed_icon_new ("media-skip-forward-symbolic"));
+    g_menu_append_item (playback, item_speed_reset);
+    g_object_unref (item_speed_reset);
     g_menu_append_section (menu, "Playback", G_MENU_MODEL (playback));
     g_object_unref (playback);
 
     /* — View section — */
     GMenu *view = g_menu_new ();
-    g_menu_append (view, "Toggle Queue",          "win.toggle-queue");
-    g_menu_append (view, "Fullscreen",            "win.fullscreen");
-    g_menu_append (view, "Picture-in-Picture",    "win.pip");
-    g_menu_append (view, "Screenshot",            "win.screenshot");
+    GMenuItem *item_toggle_queue = g_menu_item_new ("Toggle Queue", "win.toggle-queue");
+    g_menu_item_set_icon (item_toggle_queue, g_themed_icon_new ("view-list-symbolic"));
+    g_menu_append_item (view, item_toggle_queue);
+    g_object_unref (item_toggle_queue);
+    GMenuItem *item_fullscreen = g_menu_item_new ("Fullscreen", "win.fullscreen");
+    g_menu_item_set_icon (item_fullscreen, g_themed_icon_new ("view-fullscreen-symbolic"));
+    g_menu_append_item (view, item_fullscreen);
+    g_object_unref (item_fullscreen);
+    GMenuItem *item_pip = g_menu_item_new ("Picture-in-Picture", "win.pip");
+    g_menu_item_set_icon (item_pip, g_themed_icon_new ("video-display-symbolic"));
+    g_menu_append_item (view, item_pip);
+    g_object_unref (item_pip);
+    GMenuItem *item_screenshot = g_menu_item_new ("Screenshot", "win.screenshot");
+    g_menu_item_set_icon (item_screenshot, g_themed_icon_new ("camera-photo-symbolic"));
+    g_menu_append_item (view, item_screenshot);
+    g_object_unref (item_screenshot);
     g_menu_append_section (menu, "View", G_MENU_MODEL (view));
     g_object_unref (view);
 
     /* — Tools section — */
     GMenu *tools = g_menu_new ();
-    g_menu_append (tools, "Media Info",           "win.media-info");
-    g_menu_append (tools, "Clear Watch History",  "win.clear-history");
-    g_menu_append (tools, "Preferences…",         "win.preferences");
+    GMenuItem *item_media_info = g_menu_item_new ("Media Info", "win.media-info");
+    g_menu_item_set_icon (item_media_info, g_themed_icon_new ("dialog-information-symbolic"));
+    g_menu_append_item (tools, item_media_info);
+    g_object_unref (item_media_info);
+    GMenuItem *item_clear_history = g_menu_item_new ("Clear Watch History", "win.clear-history");
+    g_menu_item_set_icon (item_clear_history, g_themed_icon_new ("edit-clear-history-symbolic"));
+    g_menu_append_item (tools, item_clear_history);
+    g_object_unref (item_clear_history);
+    GMenuItem *item_preferences = g_menu_item_new ("Preferences…", "win.preferences");
+    g_menu_item_set_icon (item_preferences, g_themed_icon_new ("preferences-system-symbolic"));
+    g_menu_append_item (tools, item_preferences);
+    g_object_unref (item_preferences);
     g_menu_append_section (menu, "Tools", G_MENU_MODEL (tools));
     g_object_unref (tools);
 
     /* — Help section — */
     GMenu *help = g_menu_new ();
-    g_menu_append (help, "Keyboard Shortcuts",    "win.shortcuts");
+    GMenuItem *item_shortcuts = g_menu_item_new ("Keyboard Shortcuts", "win.shortcuts");
+    g_menu_item_set_icon (item_shortcuts, g_themed_icon_new ("preferences-desktop-keyboard-shortcuts-symbolic"));
+    g_menu_append_item (help, item_shortcuts);
+    g_object_unref (item_shortcuts);
     g_menu_append_section (menu, NULL, G_MENU_MODEL (help));
     g_object_unref (help);
 
@@ -363,6 +405,28 @@ on_motion (GtkEventControllerMotion *ctrl,
 }
 
 /* ── Click-to-play/pause on video area ────────────────────────────────── */
+static guint single_click_timeout_id = 0;
+
+typedef struct {
+    VlxWindow *self;
+} SingleClickData;
+
+static gboolean
+single_click_timeout_cb (gpointer user_data)
+{
+    SingleClickData *data = (SingleClickData *)user_data;
+    if (data) {
+        /* Single click: play/pause */
+        vlx_player_toggle (data->self->player);
+        vlx_window_show_hud (data->self, "Play / Pause");
+        /* Grab focus to the overlay so Space key works after clicking */
+        gtk_widget_grab_focus (data->self->overlay);
+        g_free (data);
+    }
+    single_click_timeout_id = 0;
+    return G_SOURCE_REMOVE;
+}
+
 static void
 on_video_clicked (GtkGestureClick *gesture,
                   gint n_press,
@@ -373,18 +437,26 @@ on_video_clicked (GtkGestureClick *gesture,
     VlxWindow *self = VLX_WINDOW (data);
 
     if (n_press == 1) {
-        /* Single click: play/pause */
-        vlx_player_toggle (self->player);
-        vlx_window_show_hud (self, "Play / Pause");
+        if (single_click_timeout_id > 0) {
+            g_source_remove (single_click_timeout_id);
+            single_click_timeout_id = 0;
+        }
+        SingleClickData *click_data = g_new0 (SingleClickData, 1);
+        click_data->self = self;
+        single_click_timeout_id = g_timeout_add (250, single_click_timeout_cb, click_data);
     } else if (n_press == 2) {
+        if (single_click_timeout_id > 0) {
+            g_source_remove (single_click_timeout_id);
+            single_click_timeout_id = 0;
+        }
         /* Double click: fullscreen toggle */
         if (gtk_window_is_fullscreen (GTK_WINDOW (self)))
             gtk_window_unfullscreen (GTK_WINDOW (self));
         else
             gtk_window_fullscreen (GTK_WINDOW (self));
+        /* Grab focus to the overlay so Space key works after clicking */
+        gtk_widget_grab_focus (self->overlay);
     }
-    /* Grab focus to the overlay so Space key works after clicking */
-    gtk_widget_grab_focus (self->overlay);
 }
 
 /* ── Title update from event bus ──────────────────────────────────────── */
