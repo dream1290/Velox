@@ -174,13 +174,8 @@ on_pipeline_buffering (VlxPipelineManager *pm,
 
     vlx_event_bus_emit_buffering (self->bus, percent);
 
-    if (percent < 100) {
-        if (self->state == VLX_STATE_PLAYING)
-            vlx_pipeline_manager_set_state (self->pipeline, GST_STATE_PAUSED);
-        set_state (self, VLX_STATE_LOADING);
-    } else {
-        vlx_pipeline_manager_set_state (self->pipeline, GST_STATE_PLAYING);
-    }
+    // Don't pause playback during buffering for local files
+    // Let GStreamer handle it automatically
 }
 
 static void
