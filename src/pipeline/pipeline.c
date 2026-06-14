@@ -32,9 +32,15 @@ struct _VlxPipelineManager {
     GstElement *audio_sink;
     GstElement *audio_volume;
 
+    GstElement *video_bin;
+    GstElement *audio_bin;
+    gboolean    video_branch_added;
+    gboolean    audio_branch_added;
+
     GSettings  *settings;
     gulong      eq_sig_id;
     gulong      vid_sig_id;
+    gulong      deint_sig_id;
 
     GstBus     *bus;
     guint       bus_watch_id;
@@ -53,6 +59,14 @@ struct _VlxPipelineManager {
     VlxPipelineCollectionCb coll_cb;
     VlxPipelineTocCb        toc_cb;
     gpointer               cb_data;
+
+    /* Async seeking */
+    GThread *seek_thread;
+    GMutex   seek_mutex;
+    GCond    seek_cond;
+    gint64   seek_target_us;
+    gboolean seek_exit;
+    gboolean seek_in_progress;
 };
 
 G_DEFINE_TYPE (VlxPipelineManager, vlx_pipeline_manager, G_TYPE_OBJECT)
@@ -172,8 +186,13 @@ on_pad_added (GstElement *src, GstPad *new_pad, gpointer data)
     if (g_str_has_prefix (name, "video/")) {
         VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE,
                       "Video pad available: %s", name);
-        if (self->deinterlace) {
-            GstPad *sink_pad = gst_element_get_static_pad (self->deinterlace, "sink");
+        if (self->video_bin) {
+            if (!self->video_branch_added) {
+                gst_bin_add (GST_BIN (self->pipeline), self->video_bin);
+                gst_element_sync_state_with_parent (self->video_bin);
+                self->video_branch_added = TRUE;
+            }
+            GstPad *sink_pad = gst_element_get_static_pad (self->video_bin, "sink");
             if (sink_pad) {
                 if (gst_pad_link (new_pad, sink_pad) != GST_PAD_LINK_OK)
                     VLX_LOG_ERROR (VLX_LOG_DOMAIN_PIPELINE, "Failed to link video pad");
@@ -183,24 +202,36 @@ on_pad_added (GstElement *src, GstPad *new_pad, gpointer data)
             }
         }
     } else if (g_str_has_prefix (name, "audio/")) {
-        GstPad *sink_pad = gst_element_get_static_pad (self->audio_convert, "sink");
-        if (!gst_pad_is_linked (sink_pad)) {
-            GstPadLinkReturn ret = gst_pad_link (new_pad, sink_pad);
-            if (GST_PAD_LINK_FAILED (ret))
-                VLX_LOG_ERROR (VLX_LOG_DOMAIN_PIPELINE,
-                               "Failed to link audio pad");
-            else
-                VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE, "Audio pad linked");
+        if (self->audio_bin) {
+            if (!self->audio_branch_added) {
+                gst_bin_add (GST_BIN (self->pipeline), self->audio_bin);
+                gst_element_sync_state_with_parent (self->audio_bin);
+                self->audio_branch_added = TRUE;
+            }
+            GstPad *sink_pad = gst_element_get_static_pad (self->audio_bin, "sink");
+            if (sink_pad) {
+                GstPadLinkReturn ret = gst_pad_link (new_pad, sink_pad);
+                if (GST_PAD_LINK_FAILED (ret))
+                    VLX_LOG_ERROR (VLX_LOG_DOMAIN_PIPELINE, "Failed to link audio pad");
+                else
+                    VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE, "Audio pad linked");
+                gst_object_unref (sink_pad);
+            }
         }
-        gst_object_unref (sink_pad);
     } else if (g_str_has_prefix (name, "text/") ||
                g_str_has_prefix (name, "subpicture/")) {
         VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE,
                       "Subtitle pad available: %s", name);
-        if (self->subtitle_bin) {
-            GstPad *sink_pad = gst_element_request_pad_simple (self->subtitle_bin, "subtitle_sink");
+        /* Link to video_bin's subtitle ghost pad (not directly to the
+         * nested subtitleoverlay — that would cross bin boundaries). */
+        if (self->video_bin) {
+            GstPad *sink_pad = gst_element_get_static_pad (self->video_bin, "subtitle_sink");
             if (sink_pad) {
-                gst_pad_link (new_pad, sink_pad);
+                GstPadLinkReturn ret = gst_pad_link (new_pad, sink_pad);
+                if (GST_PAD_LINK_FAILED (ret))
+                    VLX_LOG_ERROR (VLX_LOG_DOMAIN_PIPELINE, "Failed to link subtitle pad");
+                else
+                    VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE, "Subtitle pad linked via ghost pad");
                 gst_object_unref (sink_pad);
             }
         }
@@ -263,6 +294,17 @@ on_eq_gains_changed (GSettings *settings, const gchar *key, gpointer data)
 static void
 build_pipeline (VlxPipelineManager *self, const gchar *uri)
 {
+    /* Drain pending seek requests before tearing down */
+    g_mutex_lock (&self->seek_mutex);
+    self->seek_target_us = -1;
+    /* Wait for any in-flight seek to finish. The seek thread takes a ref
+     * on the pipeline, so it's safe — but we must wait for it to release
+     * the ref before we unref the pipeline ourselves. */
+    while (self->seek_in_progress) {
+        g_cond_wait (&self->seek_cond, &self->seek_mutex);
+    }
+    g_mutex_unlock (&self->seek_mutex);
+
     /* Tear down old pipeline */
     if (self->pipeline) {
         if (self->settings) {
@@ -273,6 +315,10 @@ build_pipeline (VlxPipelineManager *self, const gchar *uri)
             if (self->vid_sig_id) {
                 g_signal_handler_disconnect (self->settings, self->vid_sig_id);
                 self->vid_sig_id = 0;
+            }
+            if (self->deint_sig_id) {
+                g_signal_handler_disconnect (self->settings, self->deint_sig_id);
+                self->deint_sig_id = 0;
             }
         }
         gst_element_set_state (self->pipeline, GST_STATE_NULL);
@@ -285,10 +331,39 @@ build_pipeline (VlxPipelineManager *self, const gchar *uri)
             self->active_stream_ids = NULL;
         }
         g_clear_object (&self->collection);
-        
+
+        /* Null out element pointers BEFORE unrefing the pipeline,
+         * so no callback can use stale pointers during teardown. */
+        self->uridecodebin  = NULL;
+        self->deinterlace   = NULL;
+        self->video_convert = NULL;
+        self->videobalance  = NULL;
+        self->subtitle_bin  = NULL;
+        self->video_sink    = NULL;
+        self->audio_convert = NULL;
+        self->audio_resample = NULL;
+        self->equalizer     = NULL;
+        self->audio_volume  = NULL;
+        self->audio_sink    = NULL;
+
         gst_object_unref (self->pipeline);
         self->pipeline = NULL;
     }
+
+    /* Only unref bins that were NOT added to the pipeline.
+     * If they were added, the pipeline already freed them above. */
+    if (self->video_bin && !self->video_branch_added) {
+        gst_object_unref (self->video_bin);
+    }
+    self->video_bin = NULL;
+
+    if (self->audio_bin && !self->audio_branch_added) {
+        gst_object_unref (self->audio_bin);
+    }
+    self->audio_bin = NULL;
+
+    self->video_branch_added = FALSE;
+    self->audio_branch_added = FALSE;
 
     self->pipeline = gst_pipeline_new ("velox-pipeline");
 
@@ -328,22 +403,38 @@ build_pipeline (VlxPipelineManager *self, const gchar *uri)
     if (!self->audio_sink)
         self->audio_sink = gst_element_factory_make ("autoaudiosink", "asink");
 
-    /* Add all elements */
-    gst_bin_add_many (GST_BIN (self->pipeline),
-                      self->uridecodebin,
-                      self->deinterlace, self->video_convert, self->videobalance, self->subtitle_bin, self->video_sink,
-                      self->audio_convert, self->audio_resample, self->equalizer,
-                      self->audio_volume,  self->audio_sink,
-                      NULL);
-
-    /* Link static elements */
+    /* Create isolated bins for branches to prevent unconnected sinks from blocking PREROLL */
+    self->video_bin = gst_bin_new ("video_bin");
+    g_object_ref_sink (self->video_bin);
+    gst_bin_add_many (GST_BIN (self->video_bin),
+                      self->deinterlace, self->video_convert, self->videobalance, self->subtitle_bin, self->video_sink, NULL);
     gst_element_link_many (self->deinterlace, self->video_convert, self->videobalance, self->subtitle_bin, self->video_sink, NULL);
-    gst_element_link_many (self->audio_convert,
-                           self->audio_resample,
-                           self->equalizer,
-                           self->audio_volume,
-                           self->audio_sink,
-                           NULL);
+
+    /* Ghost pad for video data input */
+    GstPad *video_pad = gst_element_get_static_pad (self->deinterlace, "sink");
+    gst_element_add_pad (self->video_bin, gst_ghost_pad_new ("sink", video_pad));
+    gst_object_unref (video_pad);
+
+    /* Ghost pad for subtitle data — exposes subtitleoverlay's subtitle_sink
+     * so that on_pad_added can link subtitle pads from uridecodebin3
+     * (at the main pipeline level) into the nested video_bin. */
+    GstPad *sub_pad = gst_element_request_pad_simple (self->subtitle_bin, "subtitle_sink");
+    if (sub_pad) {
+        gst_element_add_pad (self->video_bin, gst_ghost_pad_new ("subtitle_sink", sub_pad));
+        gst_object_unref (sub_pad);
+    }
+
+    self->audio_bin = gst_bin_new ("audio_bin");
+    g_object_ref_sink (self->audio_bin);
+    gst_bin_add_many (GST_BIN (self->audio_bin),
+                      self->audio_convert, self->audio_resample, self->equalizer, self->audio_volume,  self->audio_sink, NULL);
+    gst_element_link_many (self->audio_convert, self->audio_resample, self->equalizer, self->audio_volume, self->audio_sink, NULL);
+    GstPad *audio_pad = gst_element_get_static_pad (self->audio_convert, "sink");
+    gst_element_add_pad (self->audio_bin, gst_ghost_pad_new ("sink", audio_pad));
+    gst_object_unref (audio_pad);
+
+    /* Add only the demuxer to the main pipeline initially */
+    gst_bin_add (GST_BIN (self->pipeline), self->uridecodebin);
 
     /* Connect dynamic pad signals */
     g_signal_connect (self->uridecodebin, "pad-added",
@@ -363,8 +454,8 @@ build_pipeline (VlxPipelineManager *self, const gchar *uri)
 
     /* Setup video settings (deinterlace) */
     on_video_settings_changed (self->settings, NULL, self);
-    g_signal_connect (self->settings, "changed::deinterlace",
-                      G_CALLBACK (on_video_settings_changed), self);
+    self->deint_sig_id = g_signal_connect (self->settings, "changed::deinterlace",
+                                           G_CALLBACK (on_video_settings_changed), self);
 
     /* Watch bus */
     self->bus = gst_pipeline_get_bus (GST_PIPELINE (self->pipeline));
@@ -379,15 +470,73 @@ build_pipeline (VlxPipelineManager *self, const gchar *uri)
 }
 
 /* ── GObject boilerplate ───────────────────────────────────────────────────── */
+static gpointer
+seek_thread_func (gpointer data)
+{
+    VlxPipelineManager *self = VLX_PIPELINE_MANAGER (data);
+    g_mutex_lock (&self->seek_mutex);
+    while (!self->seek_exit) {
+        if (self->seek_target_us >= 0) {
+            gint64 target = self->seek_target_us;
+            self->seek_target_us = -1;
+
+            /* Take a ref on the pipeline while holding the lock.
+             * This prevents the main thread from freeing the pipeline
+             * out from under us during the (potentially slow) seek. */
+            GstElement *pipe = self->pipeline
+                ? gst_object_ref (self->pipeline) : NULL;
+            self->seek_in_progress = TRUE;
+            g_mutex_unlock (&self->seek_mutex);
+
+            if (pipe) {
+                gst_element_seek_simple (pipe,
+                                         GST_FORMAT_TIME,
+                                         GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT,
+                                         target * GST_USECOND);
+                gst_object_unref (pipe);
+            }
+            g_mutex_lock (&self->seek_mutex);
+            self->seek_in_progress = FALSE;
+            g_cond_signal (&self->seek_cond);
+        } else {
+            g_cond_wait (&self->seek_cond, &self->seek_mutex);
+        }
+    }
+    g_mutex_unlock (&self->seek_mutex);
+    return NULL;
+}
+
 static void
 vlx_pipeline_manager_finalize (GObject *obj)
 {
     VlxPipelineManager *self = VLX_PIPELINE_MANAGER (obj);
 
+    g_mutex_lock (&self->seek_mutex);
+    self->seek_exit = TRUE;
+    g_cond_signal (&self->seek_cond);
+    g_mutex_unlock (&self->seek_mutex);
+
+    if (self->seek_thread) {
+        g_thread_join (self->seek_thread);
+        self->seek_thread = NULL;
+    }
+    g_mutex_clear (&self->seek_mutex);
+    g_cond_clear (&self->seek_cond);
+
     if (self->pipeline) {
-        if (self->settings && self->eq_sig_id) {
-            g_signal_handler_disconnect (self->settings, self->eq_sig_id);
-            self->eq_sig_id = 0;
+        if (self->settings) {
+            if (self->eq_sig_id) {
+                g_signal_handler_disconnect (self->settings, self->eq_sig_id);
+                self->eq_sig_id = 0;
+            }
+            if (self->vid_sig_id) {
+                g_signal_handler_disconnect (self->settings, self->vid_sig_id);
+                self->vid_sig_id = 0;
+            }
+            if (self->deint_sig_id) {
+                g_signal_handler_disconnect (self->settings, self->deint_sig_id);
+                self->deint_sig_id = 0;
+            }
         }
         gst_element_set_state (self->pipeline, GST_STATE_NULL);
         if (self->bus_watch_id) {
@@ -406,6 +555,17 @@ vlx_pipeline_manager_finalize (GObject *obj)
         self->active_stream_ids = NULL;
     }
 
+    /* Only unref bins that were NOT added to the pipeline */
+    if (self->video_bin && !self->video_branch_added) {
+        gst_object_unref (self->video_bin);
+    }
+    self->video_bin = NULL;
+
+    if (self->audio_bin && !self->audio_branch_added) {
+        gst_object_unref (self->audio_bin);
+    }
+    self->audio_bin = NULL;
+
     G_OBJECT_CLASS (vlx_pipeline_manager_parent_class)->finalize (obj);
 }
 
@@ -419,6 +579,13 @@ static void
 vlx_pipeline_manager_init (VlxPipelineManager *self)
 {
     self->hwaccel = VLX_HWACCEL_NONE;
+    
+    g_mutex_init (&self->seek_mutex);
+    g_cond_init (&self->seek_cond);
+    self->seek_target_us = -1;
+    self->seek_exit = FALSE;
+    self->seek_in_progress = FALSE;
+    self->seek_thread = g_thread_new ("vlx-seek", seek_thread_func, self);
 }
 
 /* ── Public API ────────────────────────────────────────────────────────────── */
@@ -470,22 +637,22 @@ vlx_pipeline_manager_seek (VlxPipelineManager *self, gint64 position_us)
     g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
     if (!self->pipeline) return;
 
-    gst_element_seek_simple (self->pipeline,
-                             GST_FORMAT_TIME,
-                             GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT,
-                             position_us * GST_USECOND);
+    g_mutex_lock (&self->seek_mutex);
+    self->seek_target_us = position_us;
+    g_cond_signal (&self->seek_cond);
+    g_mutex_unlock (&self->seek_mutex);
 }
 
 gint64
 vlx_pipeline_manager_get_position (VlxPipelineManager *self)
 {
-    g_return_val_if_fail (VLX_IS_PIPELINE_MANAGER (self), 0);
-    if (!self->pipeline) return 0;
+    g_return_val_if_fail (VLX_IS_PIPELINE_MANAGER (self), -1);
+    if (!self->pipeline) return -1;
 
-    gint64 pos = 0;
+    gint64 pos = -1;
     if (gst_element_query_position (self->pipeline, GST_FORMAT_TIME, &pos))
         return pos / GST_USECOND;
-    return 0;
+    return -1;
 }
 
 gint64

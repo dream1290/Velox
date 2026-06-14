@@ -53,6 +53,9 @@ struct _VlxSeekBar {
     VlxThumbnailCache *thumb_cache;
     GdkTexture        *hover_texture;
 
+    gdouble   drag_start_x;
+    gint64    last_scrub_time;
+
     GArray   *chapters;    /* Chapter structs */
 
     /* A-B loop markers */
@@ -292,6 +295,7 @@ on_drag_begin (GtkGestureDrag *g, gdouble x, gdouble y, gpointer data)
     VlxSeekBar *self = VLX_SEEK_BAR (data);
     (void) g; (void) y;
     self->dragging = TRUE;
+    self->drag_start_x = x;
     self->position = x_to_fraction (self, x);
     gtk_widget_queue_draw (GTK_WIDGET (self));
 }
@@ -300,21 +304,23 @@ static void
 on_drag_update (GtkGestureDrag *g, gdouble dx, gdouble dy, gpointer data)
 {
     VlxSeekBar *self = VLX_SEEK_BAR (data);
-    (void) dy;
-    gdouble start_x;
-    gtk_gesture_drag_get_start_point (g, &start_x, NULL);
-    self->position = x_to_fraction (self, start_x + dx);
+    (void) g; (void) dy;
+    self->position = x_to_fraction (self, self->drag_start_x + dx);
     gtk_widget_queue_draw (GTK_WIDGET (self));
+
+    /* Live scrub with 100ms throttle */
+    gint64 now = g_get_monotonic_time ();
+    if (now - self->last_scrub_time >= 100000) {
+        self->last_scrub_time = now;
+        g_signal_emit (self, seek_signals[SIGNAL_SEEK_REQUESTED], 0, self->position);
+    }
 }
 
 static void
 on_drag_end (GtkGestureDrag *g, gdouble dx, gdouble dy, gpointer data)
 {
     VlxSeekBar *self = VLX_SEEK_BAR (data);
-    (void) dy;
-    gdouble start_x;
-    gtk_gesture_drag_get_start_point (g, &start_x, NULL);
-    self->position = x_to_fraction (self, start_x + dx);
+    (void) g; (void) dx; (void) dy;
     self->dragging = FALSE;
     g_signal_emit (self, seek_signals[SIGNAL_SEEK_REQUESTED], 0,
                    self->position);
@@ -322,13 +328,14 @@ on_drag_end (GtkGestureDrag *g, gdouble dx, gdouble dy, gpointer data)
 }
 
 static void
-on_thumbnail_ready (const gchar *uri, GdkTexture *texture, gpointer user_data)
+on_thumbnail_ready (const gchar *uri, gint64 position_us, GdkTexture *texture, gpointer user_data)
 {
     VlxSeekBar *self = VLX_SEEK_BAR (user_data);
-    if (g_strcmp0 (self->uri, uri) == 0 && texture) {
+    if (g_strcmp0 (self->uri, uri) == 0 && texture && position_us == self->last_requested_us) {
         g_set_object (&self->hover_texture, texture);
         gtk_widget_queue_draw (GTK_WIDGET (self));
     }
+    g_object_unref (self);
 }
 
 static void
@@ -348,6 +355,7 @@ on_motion (GtkEventControllerMotion *m,
         if (ABS (snapped - self->last_requested_us) >= THUMB_REQUEST_INTERVAL_US) {
             self->last_requested_us = snapped;
             g_clear_object (&self->hover_texture);   /* clear stale frame */
+            g_object_ref (self);
             vlx_thumbnail_cache_request (self->thumb_cache, self->uri, snapped,
                                          on_thumbnail_ready, self);
         }

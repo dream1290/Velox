@@ -40,48 +40,10 @@ vlx_application_activate (GApplication *app)
 {
     VlxApplication *self = VLX_APPLICATION (app);
 
-    if (!self->window) {
+    if (!self->window)
         self->window = vlx_window_new (ADW_APPLICATION (app));
-        
-        /* Auto-load Downloads directory */
-        const gchar *dl_dir = g_get_user_special_dir (G_USER_DIRECTORY_DOWNLOAD);
-        if (dl_dir) {
-            GDir *dir = g_dir_open (dl_dir, 0, NULL);
-            if (dir) {
-                const gchar *name;
-                gboolean first = TRUE;
-                VlxPlaylist *pl = vlx_window_get_playlist (self->window);
-                
-                while ((name = g_dir_read_name (dir)) != NULL) {
-                    if (g_str_has_suffix (name, ".mp4") ||
-                        g_str_has_suffix (name, ".mkv") ||
-                        g_str_has_suffix (name, ".avi") ||
-                        g_str_has_suffix (name, ".webm")) {
-                        
-                        gchar *path = g_build_filename (dl_dir, name, NULL);
-                        GFile *f = g_file_new_for_path (path);
-                        gchar *uri = g_file_get_uri (f);
-                        
-                        if (first) {
-                            vlx_window_open (self->window, uri);
-                            first = FALSE;
-                        } else {
-                            vlx_playlist_append (pl, uri);
-                        }
-                        
-                        g_free (uri);
-                        g_object_unref (f);
-                        g_free (path);
-                    }
-                }
-                g_dir_close (dir);
-            }
-        }
-        
-        gtk_window_present (GTK_WINDOW (self->window));
-    } else {
-        gtk_window_present (GTK_WINDOW (self->window));
-    }
+
+    gtk_window_present (GTK_WINDOW (self->window));
 }
 
 /* ── Open (URI list passed via CLI or D-Bus activation) ──────────────── */
@@ -164,6 +126,7 @@ vlx_application_shutdown (GApplication *app)
         vlx_plugin_manager_unload_all (self->plugin_mgr);
 
     vlx_inhibit_manager_uninhibit (self->inhibit);
+    vlx_thumbnail_cache_shutdown ();
     vlx_thread_pool_shutdown ();
 
     G_APPLICATION_CLASS (vlx_application_parent_class)->shutdown (app);

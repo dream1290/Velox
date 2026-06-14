@@ -15,6 +15,8 @@ G_DECLARE_FINAL_TYPE (VlxControlsOverlay, vlx_controls_overlay,
                       VLX, CONTROLS_OVERLAY, GtkWidget)
 
 VlxControlsOverlay *vlx_controls_overlay_new          (VlxPlayer *player);
+void                vlx_controls_overlay_set_buffering (VlxControlsOverlay *self, gdouble fraction);
+void                vlx_controls_overlay_set_fullscreen_state (VlxControlsOverlay *self, gboolean is_fullscreen);
 void                vlx_controls_overlay_show_briefly  (VlxControlsOverlay *self);
 void                vlx_controls_overlay_seek_ripple   (VlxControlsOverlay *self,
                                                         gboolean            forward);

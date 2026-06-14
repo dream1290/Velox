@@ -25,28 +25,40 @@ enum {
 static guint playlist_signals[N_SIGNALS];
 
 static void
-rebuild_shuffle_map (VlxPlaylist *self)
+rebuild_play_order (VlxPlaylist *self)
 {
     g_array_set_size (self->shuffle_map, self->uris->len);
     for (guint i = 0; i < self->uris->len; i++)
         g_array_index (self->shuffle_map, guint, i) = i;
 
-    /* Fisher-Yates shuffle */
-    for (guint i = self->uris->len; i > 1; i--) {
-        guint j = g_random_int_range (0, i);
-        guint tmp = g_array_index (self->shuffle_map, guint, i - 1);
-        g_array_index (self->shuffle_map, guint, i - 1) =
-            g_array_index (self->shuffle_map, guint, j);
-        g_array_index (self->shuffle_map, guint, j) = tmp;
+    if (self->shuffle && self->uris->len > 1) {
+        /* Fisher-Yates shuffle */
+        for (guint i = self->uris->len; i > 1; i--) {
+            guint j = g_random_int_range (0, i);
+            guint tmp = g_array_index (self->shuffle_map, guint, i - 1);
+            g_array_index (self->shuffle_map, guint, i - 1) = g_array_index (self->shuffle_map, guint, j);
+            g_array_index (self->shuffle_map, guint, j) = tmp;
+        }
+        /* Ensure the currently playing item is at the start of the shuffled remainder so we don't repeat it immediately */
+        for (guint i = 0; i < self->shuffle_map->len; i++) {
+            if (g_array_index (self->shuffle_map, guint, i) == self->current) {
+                guint tmp = g_array_index (self->shuffle_map, guint, 0);
+                g_array_index (self->shuffle_map, guint, 0) = self->current;
+                g_array_index (self->shuffle_map, guint, i) = tmp;
+                break;
+            }
+        }
     }
 }
 
-static guint
-resolve_index (VlxPlaylist *self, guint logical)
+static gint
+find_order_index (VlxPlaylist *self, guint un_shuffled_idx)
 {
-    if (self->shuffle && self->shuffle_map->len > 0)
-        return g_array_index (self->shuffle_map, guint, logical);
-    return logical;
+    for (guint i = 0; i < self->shuffle_map->len; i++) {
+        if (g_array_index (self->shuffle_map, guint, i) == un_shuffled_idx)
+            return i;
+    }
+    return -1;
 }
 
 static void
@@ -91,9 +103,20 @@ void
 vlx_playlist_append (VlxPlaylist *self, const gchar *uri)
 {
     g_return_if_fail (VLX_IS_PLAYLIST (self));
+    guint new_idx = self->uris->len;
     g_ptr_array_add (self->uris, g_strdup (uri));
-    if (self->shuffle)
-        rebuild_shuffle_map (self);
+    
+    if (self->shuffle) {
+        /* Insert at a random position *after* the current logical position to ensure it gets played */
+        gint logical_pos = find_order_index (self, self->current);
+        guint insert_pos = self->shuffle_map->len;
+        if (logical_pos >= 0 && (guint)logical_pos + 1 < self->shuffle_map->len) {
+            insert_pos = (guint)logical_pos + 1 + g_random_int_range (0, self->shuffle_map->len - logical_pos);
+        }
+        g_array_insert_val (self->shuffle_map, insert_pos, new_idx);
+    } else {
+        g_array_append_val (self->shuffle_map, new_idx);
+    }
     g_signal_emit (self, playlist_signals[SIGNAL_CHANGED], 0);
 }
 
@@ -104,10 +127,14 @@ vlx_playlist_remove (VlxPlaylist *self, guint index)
     g_return_if_fail (index < self->uris->len);
 
     g_ptr_array_remove_index (self->uris, index);
-    if (self->current >= self->uris->len && self->uris->len > 0)
-        self->current = self->uris->len - 1;
-    if (self->shuffle)
-        rebuild_shuffle_map (self);
+    
+    /* If the current item was removed, fallback to 0 safely */
+    if (self->current == index) {
+        self->current = 0;
+    } else if (self->current > index) {
+        self->current--;
+    }
+    rebuild_play_order (self);
     g_signal_emit (self, playlist_signals[SIGNAL_CHANGED], 0);
 }
 
@@ -126,8 +153,8 @@ vlx_playlist_get_current (VlxPlaylist *self)
 {
     g_return_val_if_fail (VLX_IS_PLAYLIST (self), NULL);
     if (self->uris->len == 0) return NULL;
-    guint idx = resolve_index (self, self->current);
-    return g_ptr_array_index (self->uris, idx);
+    if (self->current >= self->uris->len) self->current = 0;
+    return g_ptr_array_index (self->uris, self->current);
 }
 
 const gchar *
@@ -139,16 +166,16 @@ vlx_playlist_next (VlxPlaylist *self)
     if (self->repeat == VLX_REPEAT_ONE)
         return vlx_playlist_get_current (self);
 
-    self->current++;
-    if (self->current >= self->uris->len) {
+    gint pos = find_order_index (self, self->current);
+    if (pos < 0 || (guint)pos + 1 >= self->shuffle_map->len) {
         if (self->repeat == VLX_REPEAT_ALL) {
-            self->current = 0;
-            if (self->shuffle)
-                rebuild_shuffle_map (self);
+            rebuild_play_order (self);
+            self->current = g_array_index (self->shuffle_map, guint, 0);
         } else {
-            self->current = self->uris->len - 1;
             return NULL;  /* end of playlist */
         }
+    } else {
+        self->current = g_array_index (self->shuffle_map, guint, pos + 1);
     }
     return vlx_playlist_get_current (self);
 }
@@ -162,13 +189,15 @@ vlx_playlist_previous (VlxPlaylist *self)
     if (self->repeat == VLX_REPEAT_ONE)
         return vlx_playlist_get_current (self);
 
-    if (self->current == 0) {
-        if (self->repeat == VLX_REPEAT_ALL)
-            self->current = self->uris->len - 1;
-        else
+    gint pos = find_order_index (self, self->current);
+    if (pos <= 0) {
+        if (self->repeat == VLX_REPEAT_ALL) {
+            self->current = g_array_index (self->shuffle_map, guint, self->shuffle_map->len - 1);
+        } else {
             return NULL;
+        }
     } else {
-        self->current--;
+        self->current = g_array_index (self->shuffle_map, guint, pos - 1);
     }
     return vlx_playlist_get_current (self);
 }
@@ -179,6 +208,9 @@ vlx_playlist_set_index (VlxPlaylist *self, guint index)
     g_return_val_if_fail (VLX_IS_PLAYLIST (self), FALSE);
     if (index >= self->uris->len) return FALSE;
     self->current = index;
+    if (self->shuffle) {
+        rebuild_play_order (self);
+    }
     return TRUE;
 }
 
@@ -205,9 +237,9 @@ vlx_playlist_get_uri_at (VlxPlaylist *self, guint index)
 void vlx_playlist_set_shuffle (VlxPlaylist *self, gboolean shuffle)
 {
     g_return_if_fail (VLX_IS_PLAYLIST (self));
+    if (self->shuffle == shuffle) return;
     self->shuffle = shuffle;
-    if (shuffle)
-        rebuild_shuffle_map (self);
+    rebuild_play_order (self);
 }
 
 gboolean vlx_playlist_get_shuffle (VlxPlaylist *self)

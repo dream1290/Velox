@@ -6,7 +6,6 @@ project('velox', 'c',
     'c_std=gnu17',
     'warning_level=2',
     'buildtype=debugoptimized',
-    'b_sanitize=address,undefined',
   ],
 )
 

@@ -34,7 +34,7 @@ typedef struct {
     VlxThumbnailReadyCb callback;
     gpointer            user_data;
     VlxThumbnailCache  *cache_ref;
-    GdkTexture         *result;    /* filled by worker */
+    GBytes             *result_bytes;
 } ThumbRequest;
 
 struct _VlxThumbnailCache {
@@ -82,109 +82,133 @@ load_from_disk (const gchar *path)
     return tex;
 }
 
-/* ── Worker thread: extract frame with GStreamer ─────────────────────── */
-static gpointer
-thumb_worker (gpointer data)
+static GThread     *worker_thread = NULL;
+static GAsyncQueue *worker_queue  = NULL;
+
+static gboolean
+thumb_complete_idle (gpointer data)
 {
     ThumbRequest *req = data;
 
-    /* Use GstDiscoverer just to confirm the file is valid */
-    GstDiscoverer *disc = gst_discoverer_new (5 * GST_SECOND, NULL);
-    if (!disc) goto done;
-
-    GstDiscovererInfo *info =
-        gst_discoverer_discover_uri (disc, req->uri, NULL);
-    gst_object_unref (disc);
-    if (!info) goto done;
-    gst_discoverer_info_unref (info);
-
-    /* Build a minimal pipeline: uridecodebin → videoconvert → appsink */
-    gchar *pipeline_str = g_strdup_printf (
-        "uridecodebin uri=\"%s\" ! videoconvert ! "
-        "videoscale ! video/x-raw,width=%d,height=%d ! "
-        "pngenc ! appsink name=sink max-buffers=1 drop=true",
-        req->uri, THUMB_WIDTH, THUMB_HEIGHT);
-
-    GError     *err      = NULL;
-    GstElement *pipeline = gst_parse_launch (pipeline_str, &err);
-    g_free (pipeline_str);
-    if (err) { g_error_free (err); goto done; }
-
-    /* Seek to the requested position */
-    gst_element_set_state (pipeline, GST_STATE_PAUSED);
-    gst_element_get_state (pipeline, NULL, NULL, 5 * GST_SECOND);
-
-    if (req->position_us > 0) {
-        gst_element_seek_simple (pipeline,
-                                 GST_FORMAT_TIME,
-                                 GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT,
-                                 req->position_us * GST_USECOND);
-        gst_element_get_state (pipeline, NULL, NULL, 3 * GST_SECOND);
+    GdkTexture *tex = NULL;
+    if (req->result_bytes) {
+        tex = gdk_texture_new_from_bytes (req->result_bytes, NULL);
+        g_bytes_unref (req->result_bytes);
     }
 
-    /* Pull one sample */
-    GstElement *sink = gst_bin_get_by_name (GST_BIN (pipeline), "sink");
-    GstSample  *sample = NULL;
-    g_signal_emit_by_name (sink, "pull-preroll", &sample);
-    gst_object_unref (sink);
-
-    gst_element_set_state (pipeline, GST_STATE_NULL);
-    gst_object_unref (pipeline);
-
-    if (!sample) goto done;
-
-    GstBuffer *buf   = gst_sample_get_buffer (sample);
-    GstMapInfo map;
-    if (gst_buffer_map (buf, &map, GST_MAP_READ)) {
-        GBytes     *bytes = g_bytes_new (map.data, map.size);
-        GdkTexture *tex   = gdk_texture_new_from_bytes (bytes, NULL);
-        g_bytes_unref (bytes);
-        req->result = tex;
-        gst_buffer_unmap (buf, &map);
-    }
-    gst_sample_unref (sample);
-
-done:
-    return NULL;
-}
-
-/* ── Completion (main thread) ────────────────────────────────────────── */
-static void
-thumb_complete (gpointer result, gpointer user_data)
-{
-    ThumbRequest *req = user_data;
-    (void) result;
-
-    if (req->result) {
+    if (tex) {
         /* Store in memory cache keyed by uri@position */
         vlx_cache_insert (req->cache_ref->mem_cache,
                           g_strdup (req->mem_key),
-                          g_object_ref (req->result));
+                          g_object_ref (tex));
 
         /* Persist to disk */
         gchar *path = disk_path (req->cache_ref, req->uri, req->position_us);
         GError *err = NULL;
-        GdkTexture *tex = req->result;
-        GBytes *bytes = gdk_texture_save_to_png_bytes (tex);
-        if (bytes) {
+        GBytes *png_bytes = gdk_texture_save_to_png_bytes (tex);
+        if (png_bytes) {
             g_file_set_contents (path,
-                                 g_bytes_get_data (bytes, NULL),
-                                 g_bytes_get_size (bytes),
+                                 g_bytes_get_data (png_bytes, NULL),
+                                 g_bytes_get_size (png_bytes),
                                  &err);
             if (err) g_error_free (err);
-            g_bytes_unref (bytes);
+            g_bytes_unref (png_bytes);
         }
         g_free (path);
     }
 
     if (req->callback)
-        req->callback (req->uri, req->result, req->user_data);
+        req->callback (req->uri, req->position_us, tex, req->user_data);
 
-    g_clear_object (&req->result);
+    g_clear_object (&tex);
     g_object_unref (req->cache_ref);
     g_free (req->uri);
     g_free (req->mem_key);
     g_slice_free (ThumbRequest, req);
+
+    return G_SOURCE_REMOVE;
+}
+
+static gpointer
+thumb_worker_loop (gpointer data)
+{
+    (void) data;
+    GError *err = NULL;
+    GstElement *pipeline = gst_parse_launch (
+        "uridecodebin name=src ! videoconvert ! "
+        "videoscale ! video/x-raw,width=256,height=144 ! "
+        "pngenc ! appsink name=sink max-buffers=1 drop=true", &err);
+    
+    if (err) {
+        g_printerr ("Thumbnail pipeline error: %s\n", err->message);
+        g_error_free (err);
+        return NULL;
+    }
+
+    GstElement *src  = gst_bin_get_by_name (GST_BIN (pipeline), "src");
+    GstElement *sink = gst_bin_get_by_name (GST_BIN (pipeline), "sink");
+    gchar *current_uri = NULL;
+
+    while (TRUE) {
+        ThumbRequest *req = g_async_queue_pop (worker_queue);
+        if (!req) continue;
+        
+        if (!req->uri) {
+            g_slice_free (ThumbRequest, req);
+            break; /* Poison pill */
+        }
+
+        /* Change URI if needed */
+        if (g_strcmp0 (current_uri, req->uri) != 0) {
+            gst_element_set_state (pipeline, GST_STATE_NULL);
+            g_object_set (src, "uri", req->uri, NULL);
+            g_free (current_uri);
+            current_uri = g_strdup (req->uri);
+            
+            gst_element_set_state (pipeline, GST_STATE_PAUSED);
+        }
+
+        /* Wait for pipeline to be ready. If it fails (e.g. invalid file), skip seek. */
+        GstStateChangeReturn ret = gst_element_get_state (pipeline, NULL, NULL, 5 * GST_SECOND);
+        if (ret == GST_STATE_CHANGE_FAILURE) {
+            g_main_context_invoke (NULL, thumb_complete_idle, req);
+            continue;
+        }
+
+        /* Seek to the requested position */
+        if (req->position_us >= 0) {
+            gst_element_seek_simple (pipeline,
+                                     GST_FORMAT_TIME,
+                                     GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT,
+                                     req->position_us * GST_USECOND);
+            gst_element_get_state (pipeline, NULL, NULL, 2 * GST_SECOND);
+        }
+
+        /* Pull one sample with timeout */
+        GstSample *sample = NULL;
+        g_signal_emit_by_name (sink, "try-pull-preroll", (guint64)(1 * GST_SECOND), &sample);
+
+        if (sample) {
+            GstBuffer *buf = gst_sample_get_buffer (sample);
+            GstMapInfo map;
+            if (gst_buffer_map (buf, &map, GST_MAP_READ)) {
+                req->result_bytes = g_bytes_new (map.data, map.size);
+                gst_buffer_unmap (buf, &map);
+            }
+            gst_sample_unref (sample);
+        }
+
+        /* Send result to main thread */
+        g_main_context_invoke (NULL, thumb_complete_idle, req);
+    }
+
+    gst_element_set_state (pipeline, GST_STATE_NULL);
+    gst_object_unref (src);
+    gst_object_unref (sink);
+    gst_object_unref (pipeline);
+    g_free (current_uri);
+
+    return NULL;
 }
 
 /* ── GObject boilerplate ─────────────────────────────────────────────── */
@@ -240,7 +264,7 @@ vlx_thumbnail_cache_request (VlxThumbnailCache  *cache,
     GdkTexture *tex = vlx_cache_lookup (cache->mem_cache, mem_key);
     if (tex) {
         g_free (mem_key);
-        if (callback) callback (uri, tex, user_data);
+        if (callback) callback (uri, position_us, tex, user_data);
         return;
     }
 
@@ -252,7 +276,7 @@ vlx_thumbnail_cache_request (VlxThumbnailCache  *cache,
         vlx_cache_insert (cache->mem_cache,
                           g_strdup (mem_key), g_object_ref (tex));
         g_free (mem_key);
-        if (callback) callback (uri, tex, user_data);
+        if (callback) callback (uri, position_us, tex, user_data);
         g_object_unref (tex);
         return;
     }
@@ -266,8 +290,14 @@ vlx_thumbnail_cache_request (VlxThumbnailCache  *cache,
     req->user_data     = user_data;
     req->cache_ref     = g_object_ref (cache);
 
-    vlx_thread_pool_push (thumb_worker, thumb_complete,
-                          req, req, NULL);
+    static gsize init = 0;
+    if (g_once_init_enter (&init)) {
+        worker_queue = g_async_queue_new ();
+        worker_thread = g_thread_new ("thumb-worker", thumb_worker_loop, NULL);
+        g_once_init_leave (&init, 1);
+    }
+
+    g_async_queue_push (worker_queue, req);
 }
 
 GdkTexture *
@@ -276,4 +306,22 @@ vlx_thumbnail_cache_lookup (VlxThumbnailCache *cache,
 {
     g_return_val_if_fail (VLX_IS_THUMBNAIL_CACHE (cache), NULL);
     return vlx_cache_lookup (cache->mem_cache, uri);
+}
+
+void
+vlx_thumbnail_cache_shutdown (void)
+{
+    if (!worker_queue || !worker_thread)
+        return;
+
+    /* Send poison pill: a request with NULL uri causes the worker to exit */
+    ThumbRequest *poison = g_slice_new0 (ThumbRequest);
+    poison->uri = NULL;
+    g_async_queue_push (worker_queue, poison);
+
+    g_thread_join (worker_thread);
+    worker_thread = NULL;
+
+    g_async_queue_unref (worker_queue);
+    worker_queue = NULL;
 }

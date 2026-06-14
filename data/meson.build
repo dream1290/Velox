@@ -15,3 +15,8 @@ install_data(
 
 gnome = import('gnome')
 gnome.compile_schemas(build_by_default: true)
+
+install_data(
+  'io.github.velox.svg',
+  install_dir: join_paths(get_option('datadir'), 'icons', 'hicolor', 'scalable', 'apps')
+)

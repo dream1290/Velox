@@ -36,6 +36,7 @@ struct _VlxVideoWidget {
 
     /* Screenshot request */
     gchar      *screenshot_path;
+    gint        disposed;
 };
 
 G_DEFINE_TYPE (VlxVideoWidget, vlx_video_widget, GTK_TYPE_GL_AREA)
@@ -313,6 +314,21 @@ on_render (GtkGLArea *area, GdkGLContext *context)
     return TRUE;
 }
 
+static gboolean
+queue_render_idle (gpointer data)
+{
+    VlxVideoWidget *self = VLX_VIDEO_WIDGET (data);
+
+    /* Only queue a render if the widget is still alive and realized.
+     * The widget may have been disposed between the idle being scheduled
+     * (on the GStreamer thread) and this callback firing (on the main thread). */
+    if (gtk_widget_get_realized (GTK_WIDGET (self)))
+        gtk_gl_area_queue_render (GTK_GL_AREA (self));
+
+    g_object_unref (self);  /* Drop the ref taken in on_new_sample */
+    return G_SOURCE_REMOVE;
+}
+
 /* ── GStreamer "new-sample" appsink callback ─────────────────────────── */
 static GstFlowReturn
 on_new_sample (GstElement *sink, gpointer data)
@@ -324,12 +340,19 @@ on_new_sample (GstElement *sink, gpointer data)
     g_signal_emit_by_name (sink, "pull-sample", &sample);
     if (!sample) return GST_FLOW_ERROR;
 
+    if (g_atomic_int_get (&self->disposed)) {
+        gst_sample_unref (sample);
+        return GST_FLOW_EOS;
+    }
+
     g_mutex_lock (&self->sample_lock);
     g_clear_pointer (&self->current_sample, gst_sample_unref);
     self->current_sample = sample;
     g_mutex_unlock (&self->sample_lock);
 
-    gtk_gl_area_queue_render (GTK_GL_AREA (self));
+    /* Take a ref so the widget stays alive until the idle callback fires */
+    g_object_ref (self);
+    g_idle_add (queue_render_idle, self);
     return GST_FLOW_OK;
 }
 
@@ -338,6 +361,7 @@ static void
 vlx_video_widget_dispose (GObject *obj)
 {
     VlxVideoWidget *self = VLX_VIDEO_WIDGET (obj);
+    g_atomic_int_set (&self->disposed, TRUE);
     if (self->sink) {
         g_signal_handlers_disconnect_by_data (self->sink, self);
         g_clear_object (&self->sink);

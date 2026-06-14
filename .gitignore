@@ -1,0 +1,40 @@
+# Build directories
+build/
+build-deb/
+deb-build/
+
+# Cache
+.cache/
+
+# IDE
+.kiro/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Compiled packages
+*.deb
+*.rpm
+*.tar.gz
+*.zip
+
+# Compiled objects
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+
+# Backup files
+*.bak
+*.backup
+
+# Temporary files
+*.tmp
+*.log
+*.pid
+
+# Meson private data
+meson-private/

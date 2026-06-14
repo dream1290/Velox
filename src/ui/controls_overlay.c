@@ -417,6 +417,14 @@ on_fs_clicked (GtkButton *b, gpointer data)
         gtk_window_fullscreen (win);
 }
 
+void
+vlx_controls_overlay_set_fullscreen_state (VlxControlsOverlay *self, gboolean is_fullscreen)
+{
+    g_return_if_fail (VLX_IS_CONTROLS_OVERLAY (self));
+    gtk_button_set_icon_name (GTK_BUTTON (self->fs_btn),
+        is_fullscreen ? "view-restore-symbolic" : "view-fullscreen-symbolic");
+}
+
 /* ── GtkWidget vfuncs ────────────────────────────────────────────────── */
 static void
 vlx_controls_overlay_measure (GtkWidget      *widget,

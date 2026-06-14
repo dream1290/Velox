@@ -15,6 +15,7 @@ G_DECLARE_FINAL_TYPE (VlxThumbnailCache, vlx_thumbnail_cache,
                       VLX, THUMBNAIL_CACHE, GObject)
 
 typedef void (*VlxThumbnailReadyCb) (const gchar *uri,
+                                     gint64      position_us,
                                      GdkTexture  *texture,
                                      gpointer     user_data);
 
@@ -28,5 +29,7 @@ void vlx_thumbnail_cache_request (VlxThumbnailCache  *cache,
 
 GdkTexture *vlx_thumbnail_cache_lookup (VlxThumbnailCache *cache,
                                         const gchar       *uri);
+
+void vlx_thumbnail_cache_shutdown (void);
 
 G_END_DECLS

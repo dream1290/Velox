@@ -33,6 +33,7 @@ struct _VlxWindow {
     VlxPlaylistPanel     *playlist_panel;
 
     GtkWidget            *open_btn;
+    GtkWidget            *queue_btn;
     GtkWidget            *menu_btn;
     GtkWidget            *hbar;
     AdwToolbarView       *toolbar_view;
@@ -65,6 +66,17 @@ static void vlx_window_show_open_url_dialog (VlxWindow *self);
 static void vlx_window_show_cheat_sheet (VlxWindow *self);
 
 static void on_open_file_ready (GObject *, GAsyncResult *, gpointer);
+
+/* ── Unified playlist playback helper ─────────────────────────────────── */
+static void
+play_playlist_uri (VlxWindow *self, const gchar *uri)
+{
+    if (!uri) return;
+    vlx_player_open (self->player, uri);
+    GstElement *sink = vlx_player_get_video_sink (self->player);
+    vlx_video_widget_set_sink (self->video_widget, sink);
+    vlx_playlist_panel_set_playing (self->playlist_panel);
+}
 
 static void
 act_open_file (GSimpleAction *action, GVariant *param, gpointer data)
@@ -168,6 +180,15 @@ act_preferences (GSimpleAction *action, GVariant *param, gpointer data)
 }
 
 static void
+act_toggle_queue (GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void) action; (void) param;
+    VlxWindow *self = VLX_WINDOW (data);
+    gboolean show = !adw_overlay_split_view_get_show_sidebar (self->split);
+    adw_overlay_split_view_set_show_sidebar (self->split, show);
+}
+
+static void
 act_shortcuts (GSimpleAction *action, GVariant *param, gpointer data)
 { (void) action; (void) param; vlx_window_show_cheat_sheet (VLX_WINDOW (data)); }
 
@@ -227,6 +248,7 @@ vlx_window_setup_actions_and_menu (VlxWindow *self)
         { "pip",             act_pip,            NULL, NULL, NULL },
         { "media-info",      act_media_info,     NULL, NULL, NULL },
         { "preferences",     act_preferences,    NULL, NULL, NULL },
+        { "toggle-queue",    act_toggle_queue,   NULL, NULL, NULL },
         { "shortcuts",       act_shortcuts,      NULL, NULL, NULL },
         { "clear-history",   act_clear_history,  NULL, NULL, NULL },
         { "ab-loop",         act_ab_loop,        NULL, NULL, NULL },
@@ -256,6 +278,7 @@ vlx_window_setup_actions_and_menu (VlxWindow *self)
 
     /* — View section — */
     GMenu *view = g_menu_new ();
+    g_menu_append (view, "Toggle Queue",          "win.toggle-queue");
     g_menu_append (view, "Fullscreen",            "win.fullscreen");
     g_menu_append (view, "Picture-in-Picture",    "win.pip");
     g_menu_append (view, "Screenshot",            "win.screenshot");
@@ -401,13 +424,8 @@ on_state_changed (VlxEventBus   *bus,
 static void
 on_playlist_item_activated (VlxPlaylistPanel *panel, const gchar *uri, gpointer data)
 {
-    VlxWindow *self = VLX_WINDOW (data);
     (void) panel;
-    if (uri) {
-        vlx_player_open (self->player, uri);
-        GstElement *sink = vlx_player_get_video_sink (self->player);
-        vlx_video_widget_set_sink (self->video_widget, sink);
-    }
+    play_playlist_uri (VLX_WINDOW (data), uri);
 }
 
 static void
@@ -417,20 +435,18 @@ on_fullscreened (GObject *obj, GParamSpec *pspec, gpointer data)
     (void) pspec; (void) data;
     gboolean is_fs = gtk_window_is_fullscreen (GTK_WINDOW (self));
     adw_toolbar_view_set_reveal_top_bars (self->toolbar_view, !is_fs);
-    adw_overlay_split_view_set_show_sidebar (self->split, !is_fs);
+    if (is_fs) {
+        adw_overlay_split_view_set_show_sidebar (self->split, FALSE);
+    }
+    vlx_controls_overlay_set_fullscreen_state (self->controls, is_fs);
 }
 
 static void
 on_eos (VlxEventBus *bus, gpointer data)
 {
-    VlxWindow *self = VLX_WINDOW (data);
     (void) bus;
-    const gchar *uri = vlx_playlist_next (self->playlist);
-    if (uri) {
-        vlx_player_open (self->player, uri);
-        GstElement *sink = vlx_player_get_video_sink (self->player);
-        vlx_video_widget_set_sink (self->video_widget, sink);
-    }
+    VlxWindow *self = VLX_WINDOW (data);
+    play_playlist_uri (self, vlx_playlist_next (self->playlist));
 }
 
 static void
@@ -443,27 +459,17 @@ on_stream_collection (VlxEventBus *bus, GstStreamCollection *collection, gpointe
 static void
 on_controls_next (VlxControlsOverlay *controls, gpointer data)
 {
-    VlxWindow *self = VLX_WINDOW (data);
     (void) controls;
-    const gchar *uri = vlx_playlist_next (self->playlist);
-    if (uri) {
-        vlx_player_open (self->player, uri);
-        GstElement *sink = vlx_player_get_video_sink (self->player);
-        vlx_video_widget_set_sink (self->video_widget, sink);
-    }
+    VlxWindow *self = VLX_WINDOW (data);
+    play_playlist_uri (self, vlx_playlist_next (self->playlist));
 }
 
 static void
 on_controls_prev (VlxControlsOverlay *controls, gpointer data)
 {
-    VlxWindow *self = VLX_WINDOW (data);
     (void) controls;
-    const gchar *uri = vlx_playlist_previous (self->playlist);
-    if (uri) {
-        vlx_player_open (self->player, uri);
-        GstElement *sink = vlx_player_get_video_sink (self->player);
-        vlx_video_widget_set_sink (self->video_widget, sink);
-    }
+    VlxWindow *self = VLX_WINDOW (data);
+    play_playlist_uri (self, vlx_playlist_previous (self->playlist));
 }
 
 static gboolean
@@ -682,43 +688,43 @@ on_key_pressed (GtkEventControllerKey *ctrl,
 
     switch (keyval) {
     case GDK_KEY_n:
-    case GDK_KEY_N: {
-        const gchar *uri = vlx_playlist_next (self->playlist);
-        if (uri) {
-            vlx_player_open (self->player, uri);
-            GstElement *sink = vlx_player_get_video_sink (self->player);
-            vlx_video_widget_set_sink (self->video_widget, sink);
-        }
+    case GDK_KEY_N:
+        play_playlist_uri (self, vlx_playlist_next (self->playlist));
         return TRUE;
-    }
+    case GDK_KEY_q:
+    case GDK_KEY_Q:
+        g_action_group_activate_action (G_ACTION_GROUP (self), "toggle-queue", NULL);
+        return TRUE;
     case GDK_KEY_b:
-    case GDK_KEY_B: {
-        const gchar *uri = vlx_playlist_previous (self->playlist);
-        if (uri) {
-            vlx_player_open (self->player, uri);
-            GstElement *sink = vlx_player_get_video_sink (self->player);
-            vlx_video_widget_set_sink (self->video_widget, sink);
-        }
+    case GDK_KEY_B:
+        play_playlist_uri (self, vlx_playlist_previous (self->playlist));
         return TRUE;
-    }
     case GDK_KEY_space:
         vlx_player_toggle (self->player);
         vlx_window_show_hud (self, "Play / Pause");
         return TRUE;
     case GDK_KEY_Left:
     case GDK_KEY_j:
-    case GDK_KEY_J:
-        vlx_player_seek_relative (self->player, -10 * G_USEC_PER_SEC);
+    case GDK_KEY_J: {
+        gint64 jump = 10;
+        if (state & GDK_SHIFT_MASK) jump = 3;
+        else if (state & GDK_CONTROL_MASK) jump = 60;
+        vlx_player_seek_relative (self->player, -jump * G_USEC_PER_SEC);
         vlx_controls_overlay_seek_ripple (self->controls, FALSE);
-        vlx_window_show_hud (self, "-10s");
+        vlx_window_show_hud (self, "-%ds", (int)jump);
         return TRUE;
+    }
     case GDK_KEY_Right:
     case GDK_KEY_l:
-    case GDK_KEY_L:
-        vlx_player_seek_relative (self->player, +10 * G_USEC_PER_SEC);
+    case GDK_KEY_L: {
+        gint64 jump = 10;
+        if (state & GDK_SHIFT_MASK) jump = 3;
+        else if (state & GDK_CONTROL_MASK) jump = 60;
+        vlx_player_seek_relative (self->player, +jump * G_USEC_PER_SEC);
         vlx_controls_overlay_seek_ripple (self->controls, TRUE);
-        vlx_window_show_hud (self, "+10s");
+        vlx_window_show_hud (self, "+%ds", (int)jump);
         return TRUE;
+    }
     case GDK_KEY_Up: {
         gdouble vol = CLAMP (vlx_player_get_volume (self->player) + 0.05, 0.0, 1.0);
         vlx_player_set_volume (self->player, vol);
@@ -1051,6 +1057,11 @@ vlx_window_init (VlxWindow *self)
     gtk_widget_set_tooltip_text (self->open_btn, "Open file (Ctrl+O)");
     adw_header_bar_pack_start (ADW_HEADER_BAR (self->hbar), self->open_btn);
 
+    self->queue_btn = gtk_toggle_button_new ();
+    gtk_button_set_icon_name (GTK_BUTTON (self->queue_btn), "view-list-symbolic");
+    gtk_widget_set_tooltip_text (self->queue_btn, "Toggle Queue (Q)");
+    adw_header_bar_pack_end (ADW_HEADER_BAR (self->hbar), self->queue_btn);
+
     self->menu_btn = gtk_menu_button_new ();
     gtk_menu_button_set_icon_name (GTK_MENU_BUTTON (self->menu_btn),
                                    "open-menu-symbolic");
@@ -1108,6 +1119,8 @@ vlx_window_init (VlxWindow *self)
     /* ── Split view: sidebar (playlist) + content (video) ─────────── */
     self->split = ADW_OVERLAY_SPLIT_VIEW (
         adw_overlay_split_view_new ());
+    adw_overlay_split_view_set_collapsed (self->split, TRUE);
+    adw_overlay_split_view_set_show_sidebar (self->split, FALSE);
 
     /* Sidebar */
     adw_overlay_split_view_set_sidebar (self->split, GTK_WIDGET (self->playlist_panel));
@@ -1156,6 +1169,11 @@ vlx_window_init (VlxWindow *self)
     g_signal_connect_object (self->bus, "stream-collection",
                              G_CALLBACK (on_stream_collection), self, 0);
 
+    /* Bind queue button active state to split view show-sidebar */
+    g_object_bind_property (self->queue_btn, "active",
+                            self->split, "show-sidebar",
+                            G_BINDING_BIDIRECTIONAL | G_BINDING_SYNC_CREATE);
+
     /* ── Click-to-play/pause on video area ── */
     GtkGesture *click = gtk_gesture_click_new ();
     gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (click), GDK_BUTTON_PRIMARY);
@@ -1172,7 +1190,7 @@ vlx_window_init (VlxWindow *self)
     gtk_widget_add_controller (GTK_WIDGET (self), GTK_EVENT_CONTROLLER (drop));
 }
 
-/* ── Public API ───────────────────────────────────────────────────────── */
+/* ── HUD ─────────────────────────────────────────────────────────────── */
 VlxWindow *
 vlx_window_new (AdwApplication *app)
 {

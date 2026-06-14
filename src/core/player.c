@@ -24,6 +24,7 @@ struct _VlxPlayer {
     gdouble         rate;
     gint64          duration_us;
     gint64          last_toggle_time_us;
+    gboolean        is_eos;
 
     /* A-B loop */
     gint64          ab_a_us;
@@ -34,6 +35,7 @@ struct _VlxPlayer {
     GArray         *chapters_us;   /* gint64 timestamps in µs */
 
     guint           tick_source_id;
+    gint64          last_seek_req_time;
 };
 
 G_DEFINE_TYPE (VlxPlayer, vlx_player, G_TYPE_OBJECT)
@@ -61,6 +63,8 @@ position_tick_cb (gpointer data)
         return G_SOURCE_CONTINUE;
 
     gint64 pos = vlx_pipeline_manager_get_position (self->pipeline);
+    if (pos < 0) return G_SOURCE_CONTINUE;
+
     gint64 dur = vlx_pipeline_manager_get_duration (self->pipeline);
 
     if (dur > 0)
@@ -141,6 +145,7 @@ on_pipeline_eos (VlxPipelineManager *pm, gpointer data)
     VlxPlayer *self = VLX_PLAYER (data);
     (void) pm;
 
+    self->is_eos = TRUE;
     stop_tick (self);
     vlx_event_bus_emit_eos (self->bus);
     set_state (self, VLX_STATE_STOPPED);
@@ -358,6 +363,7 @@ vlx_player_open (VlxPlayer *self, const gchar *uri)
                                         on_pipeline_toc,
                                         self);
 
+    self->is_eos = FALSE;
     vlx_pipeline_manager_open (self->pipeline, uri);
     vlx_pipeline_manager_set_volume (self->pipeline, self->volume);
 
@@ -369,8 +375,14 @@ vlx_player_open (VlxPlayer *self, const gchar *uri)
 void vlx_player_play (VlxPlayer *self)
 {
     g_return_if_fail (VLX_IS_PLAYER (self));
-    if (self->pipeline)
+    if (self->pipeline) {
+        /* If the pipeline reached EOS, it must be flushed to 0 to play again */
+        if (self->is_eos) {
+            vlx_pipeline_manager_seek (self->pipeline, 0);
+            self->is_eos = FALSE;
+        }
         vlx_pipeline_manager_set_state (self->pipeline, GST_STATE_PLAYING);
+    }
 }
 
 void vlx_player_pause (VlxPlayer *self)
@@ -408,7 +420,9 @@ void vlx_player_toggle (VlxPlayer *self)
 void vlx_player_seek (VlxPlayer *self, gint64 position_us)
 {
     g_return_if_fail (VLX_IS_PLAYER (self));
+
     if (self->pipeline) {
+        self->is_eos = FALSE;
         vlx_pipeline_manager_seek (self->pipeline, position_us);
     }
 }
