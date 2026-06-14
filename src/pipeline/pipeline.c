@@ -2,10 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Builds the dynamic pipeline:
- *   uridecodebin3 ──[video]──→ videoconvert → glimagesink
- *                  ──[audio]──→ audioconvert → audioresample → pipewiresink
- *                  ──[text]───→ (subtitle engine)
+ * Builds a robust pipeline using playbin3 for maximum reliability
  */
 
 #include "pipeline/pipeline.h"
@@ -20,842 +17,493 @@ struct _VlxPipelineManager {
     GObject parent_instance;
 
     GstElement *pipeline;
-    GstElement *uridecodebin;
-    GstElement *deinterlace;
-    GstElement *video_convert;
-    GstElement *videobalance;
-    GstElement *subtitle_bin;
+    GstElement *playbin;
     GstElement *video_sink;
-    GstElement *audio_convert;
-    GstElement *audio_resample;
-    GstElement *equalizer;
     GstElement *audio_sink;
-    GstElement *audio_volume;
 
-    GstElement *video_bin;
-    GstElement *audio_bin;
-    gboolean    video_branch_added;
-    gboolean    audio_branch_added;
+    GSettings *settings;
+    gulong eq_sig_id;
+    gulong vid_sig_id;
+    gulong deint_sig_id;
 
-    GSettings  *settings;
-    gulong      eq_sig_id;
-    gulong      vid_sig_id;
-    gulong      deint_sig_id;
+    GstBus *bus;
+    guint bus_watch_id;
 
-    GstBus     *bus;
-    guint       bus_watch_id;
-
-    /* Stream management */
-    GstStreamCollection   *collection;
-    GList                 *active_stream_ids;
+    GstStreamCollection *collection;
+    GList *active_stream_ids;
 
     VlxHwAccelType hwaccel;
 
-    /* Callbacks */
-    VlxPipelineStateCb     state_cb;
-    VlxPipelineEosCb       eos_cb;
-    VlxPipelineErrorCb     error_cb;
+    VlxPipelineStateCb state_cb;
+    VlxPipelineEosCb eos_cb;
+    VlxPipelineErrorCb error_cb;
     VlxPipelineBufferingCb buf_cb;
     VlxPipelineCollectionCb coll_cb;
-    VlxPipelineTocCb        toc_cb;
-    gpointer               cb_data;
+    VlxPipelineTocCb toc_cb;
+    gpointer cb_data;
 
-    /* Async seeking */
-    GThread *seek_thread;
-    GMutex   seek_mutex;
-    GCond    seek_cond;
-    gint64   seek_target_us;
+    GMutex seek_mutex;
+    GCond seek_cond;
+    gint64 seek_target_us;
     gboolean seek_exit;
     gboolean seek_in_progress;
+    GThread *seek_thread;
 };
 
-G_DEFINE_TYPE (VlxPipelineManager, vlx_pipeline_manager, G_TYPE_OBJECT)
+G_DEFINE_TYPE(VlxPipelineManager, vlx_pipeline_manager, G_TYPE_OBJECT)
 
-/* ── Bus message handler ───────────────────────────────────────────────────── */
-static gboolean
-bus_message_cb (GstBus *bus, GstMessage *msg, gpointer data)
-{
-    VlxPipelineManager *self = VLX_PIPELINE_MANAGER (data);
-    (void) bus;
-
-    switch (GST_MESSAGE_TYPE (msg)) {
-    case GST_MESSAGE_STATE_CHANGED: {
-        if (GST_MESSAGE_SRC (msg) != GST_OBJECT (self->pipeline))
-            break;
-        GstState old_st, new_st, pending;
-        gst_message_parse_state_changed (msg, &old_st, &new_st, &pending);
-        VLX_LOG_DEBUG (VLX_LOG_DOMAIN_PIPELINE,
-                       "State: %s → %s",
-                       gst_element_state_get_name (old_st),
-                       gst_element_state_get_name (new_st));
-        if (self->state_cb)
-            self->state_cb (self, old_st, new_st, self->cb_data);
-        break;
-    }
-    case GST_MESSAGE_EOS:
-        VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE, "EOS received");
-        if (self->eos_cb)
-            self->eos_cb (self, self->cb_data);
-        break;
-
-    case GST_MESSAGE_ERROR: {
-        GError *err = NULL;
-        gchar  *dbg = NULL;
-        gst_message_parse_error (msg, &err, &dbg);
-        VLX_LOG_ERROR (VLX_LOG_DOMAIN_PIPELINE,
-                       "Pipeline error: %s (debug: %s)",
-                       err->message, dbg ? dbg : "none");
-        if (self->error_cb)
-            self->error_cb (self, err->message, self->cb_data);
-        g_error_free (err);
-        g_free (dbg);
-        break;
-    }
-    case GST_MESSAGE_BUFFERING: {
-        gint percent = 0;
-        gst_message_parse_buffering (msg, &percent);
-        if (self->buf_cb)
-            self->buf_cb (self, percent, self->cb_data);
-        break;
-    }
-    case GST_MESSAGE_STREAM_COLLECTION: {
-        GstStreamCollection *collection = NULL;
-        gst_message_parse_stream_collection (msg, &collection);
-        if (collection) {
-            g_set_object (&self->collection, collection);
-            if (self->coll_cb)
-                self->coll_cb (self, collection, self->cb_data);
-            gst_object_unref (collection);
-        }
-        break;
-    }
-    case GST_MESSAGE_STREAMS_SELECTED: {
-        if (self->active_stream_ids) {
-            g_list_free_full (self->active_stream_ids, g_free);
-            self->active_stream_ids = NULL;
-        }
-        guint n = gst_message_streams_selected_get_size (msg);
-        for (guint i = 0; i < n; i++) {
-            GstStream *stream = gst_message_streams_selected_get_stream (msg, i);
-            if (stream) {
-                self->active_stream_ids = g_list_append (self->active_stream_ids,
-                                                         g_strdup (gst_stream_get_stream_id (stream)));
-                gst_object_unref (stream);
-            }
-        }
-        break;
-    }
-    case GST_MESSAGE_ASYNC_DONE:
-        VLX_LOG_DEBUG (VLX_LOG_DOMAIN_PIPELINE, "Async done (seek complete)");
-        break;
-
-    case GST_MESSAGE_TOC: {
-        GstToc   *toc      = NULL;
-        gboolean  updated  = FALSE;
-        gst_message_parse_toc (msg, &toc, &updated);
-        if (toc) {
-            VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE,
-                          "TOC received (updated=%s)",
-                          updated ? "yes" : "no");
-            if (self->toc_cb)
-                self->toc_cb (self, toc, self->cb_data);
-            gst_toc_unref (toc);
-        }
-        break;
-    }
-    default:
-        break;
-    }
-
-    return G_SOURCE_CONTINUE;
-}
-
-/* ── Pad-added callback for uridecodebin3 ──────────────────────────────────── */
-static void
-on_pad_added (GstElement *src, GstPad *new_pad, gpointer data)
-{
-    VlxPipelineManager *self = VLX_PIPELINE_MANAGER (data);
-    (void) src;
-
-    GstCaps *caps = gst_pad_get_current_caps (new_pad);
-    if (!caps)
-        caps = gst_pad_query_caps (new_pad, NULL);
-
-    const gchar *name = gst_structure_get_name (gst_caps_get_structure (caps, 0));
-
-    if (g_str_has_prefix (name, "video/")) {
-        VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE,
-                      "Video pad available: %s", name);
-        if (self->video_bin) {
-            if (!self->video_branch_added) {
-                gst_bin_add (GST_BIN (self->pipeline), self->video_bin);
-                gst_element_sync_state_with_parent (self->video_bin);
-                self->video_branch_added = TRUE;
-            }
-            GstPad *sink_pad = gst_element_get_static_pad (self->video_bin, "sink");
-            if (sink_pad) {
-                if (gst_pad_link (new_pad, sink_pad) != GST_PAD_LINK_OK)
-                    VLX_LOG_ERROR (VLX_LOG_DOMAIN_PIPELINE, "Failed to link video pad");
-                else
-                    VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE, "Video pad linked");
-                gst_object_unref (sink_pad);
-            }
-        }
-    } else if (g_str_has_prefix (name, "audio/")) {
-        if (self->audio_bin) {
-            if (!self->audio_branch_added) {
-                gst_bin_add (GST_BIN (self->pipeline), self->audio_bin);
-                gst_element_sync_state_with_parent (self->audio_bin);
-                self->audio_branch_added = TRUE;
-            }
-            GstPad *sink_pad = gst_element_get_static_pad (self->audio_bin, "sink");
-            if (sink_pad) {
-                GstPadLinkReturn ret = gst_pad_link (new_pad, sink_pad);
-                if (GST_PAD_LINK_FAILED (ret))
-                    VLX_LOG_ERROR (VLX_LOG_DOMAIN_PIPELINE, "Failed to link audio pad");
-                else
-                    VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE, "Audio pad linked");
-                gst_object_unref (sink_pad);
-            }
-        }
-    } else if (g_str_has_prefix (name, "text/") ||
-               g_str_has_prefix (name, "subpicture/")) {
-        VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE,
-                      "Subtitle pad available: %s", name);
-        /* Link to video_bin's subtitle ghost pad (not directly to the
-         * nested subtitleoverlay — that would cross bin boundaries). */
-        if (self->video_bin) {
-            GstPad *sink_pad = gst_element_get_static_pad (self->video_bin, "subtitle_sink");
-            if (sink_pad) {
-                GstPadLinkReturn ret = gst_pad_link (new_pad, sink_pad);
-                if (GST_PAD_LINK_FAILED (ret))
-                    VLX_LOG_ERROR (VLX_LOG_DOMAIN_PIPELINE, "Failed to link subtitle pad");
-                else
-                    VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE, "Subtitle pad linked via ghost pad");
-                gst_object_unref (sink_pad);
-            }
-        }
-    }
-
-    gst_caps_unref (caps);
-}
-
-/* ── Pipeline construction ─────────────────────────────────────────────────── */
-static void
-on_video_settings_changed (GSettings *settings, const gchar *key, gpointer data)
-{
-    VlxPipelineManager *self = VLX_PIPELINE_MANAGER (data);
-    
-    if (!key || g_strcmp0 (key, "deinterlace") == 0) {
-        if (self->deinterlace) {
-            gboolean deint = g_settings_get_boolean (settings, "deinterlace");
-            /* mode: 0=auto, 1=interlaced, 2=disabled */
-            g_object_set (self->deinterlace, "mode", deint ? 1 : 2, NULL);
-        }
-    }
-}
-
-static void
-on_video_balance_changed (GSettings *settings, const gchar *key, gpointer data)
-{
-    VlxPipelineManager *self = VLX_PIPELINE_MANAGER (data);
-    if (!self->videobalance) return;
-    
-    /* key is NULL when called manually to set all */
-    if (!key || g_strcmp0 (key, "video-brightness") == 0)
-        g_object_set (self->videobalance, "brightness", g_settings_get_double (settings, "video-brightness"), NULL);
-    if (!key || g_strcmp0 (key, "video-contrast") == 0)
-        g_object_set (self->videobalance, "contrast", g_settings_get_double (settings, "video-contrast"), NULL);
-    if (!key || g_strcmp0 (key, "video-saturation") == 0)
-        g_object_set (self->videobalance, "saturation", g_settings_get_double (settings, "video-saturation"), NULL);
-    if (!key || g_strcmp0 (key, "video-hue") == 0)
-        g_object_set (self->videobalance, "hue", g_settings_get_double (settings, "video-hue"), NULL);
-}
-
-static void
-on_eq_gains_changed (GSettings *settings, const gchar *key, gpointer data)
-{
-    VlxPipelineManager *self = VLX_PIPELINE_MANAGER (data);
-    if (!self->equalizer) return;
-
-    GVariant *gains_var = g_settings_get_value (settings, "equalizer-gains");
-    gsize n_gains = 0;
-    const gdouble *gains = g_variant_get_fixed_array (gains_var, &n_gains, sizeof(gdouble));
-    if (n_gains == 10) {
-        for (gsize i = 0; i < 10; i++) {
-            gchar *prop = g_strdup_printf ("band%zu", i);
-            g_object_set (self->equalizer, prop, gains[i], NULL);
-            g_free (prop);
-        }
-    }
-    g_variant_unref (gains_var);
-}
-
-static void
-build_pipeline (VlxPipelineManager *self, const gchar *uri)
-{
-    /* Drain pending seek requests before tearing down */
-    g_mutex_lock (&self->seek_mutex);
-    self->seek_target_us = -1;
-    /* Wait for any in-flight seek to finish. The seek thread takes a ref
-     * on the pipeline, so it's safe — but we must wait for it to release
-     * the ref before we unref the pipeline ourselves. */
-    while (self->seek_in_progress) {
-        g_cond_wait (&self->seek_cond, &self->seek_mutex);
-    }
-    g_mutex_unlock (&self->seek_mutex);
-
-    /* Tear down old pipeline */
-    if (self->pipeline) {
-        if (self->settings) {
-            if (self->eq_sig_id) {
-                g_signal_handler_disconnect (self->settings, self->eq_sig_id);
-                self->eq_sig_id = 0;
-            }
-            if (self->vid_sig_id) {
-                g_signal_handler_disconnect (self->settings, self->vid_sig_id);
-                self->vid_sig_id = 0;
-            }
-            if (self->deint_sig_id) {
-                g_signal_handler_disconnect (self->settings, self->deint_sig_id);
-                self->deint_sig_id = 0;
-            }
-        }
-        gst_element_set_state (self->pipeline, GST_STATE_NULL);
-        if (self->bus_watch_id) {
-            g_source_remove (self->bus_watch_id);
-            self->bus_watch_id = 0;
-        }
-        if (self->active_stream_ids) {
-            g_list_free_full (self->active_stream_ids, g_free);
-            self->active_stream_ids = NULL;
-        }
-        g_clear_object (&self->collection);
-
-        /* Null out element pointers BEFORE unrefing the pipeline,
-         * so no callback can use stale pointers during teardown. */
-        self->uridecodebin  = NULL;
-        self->deinterlace   = NULL;
-        self->video_convert = NULL;
-        self->videobalance  = NULL;
-        self->subtitle_bin  = NULL;
-        self->video_sink    = NULL;
-        self->audio_convert = NULL;
-        self->audio_resample = NULL;
-        self->equalizer     = NULL;
-        self->audio_volume  = NULL;
-        self->audio_sink    = NULL;
-
-        gst_object_unref (self->pipeline);
-        self->pipeline = NULL;
-    }
-
-    /* Only unref bins that were NOT added to the pipeline.
-     * If they were added, the pipeline already freed them above. */
-    if (self->video_bin && !self->video_branch_added) {
-        gst_object_unref (self->video_bin);
-    }
-    self->video_bin = NULL;
-
-    if (self->audio_bin && !self->audio_branch_added) {
-        gst_object_unref (self->audio_bin);
-    }
-    self->audio_bin = NULL;
-
-    self->video_branch_added = FALSE;
-    self->audio_branch_added = FALSE;
-
-    self->pipeline = gst_pipeline_new ("velox-pipeline");
-
-    /* Source + decoder */
-    self->uridecodebin = gst_element_factory_make ("uridecodebin3", "source");
-    g_object_set (self->uridecodebin, "uri", uri, NULL);
-
-    /* Video branch */
-    self->deinterlace   = gst_element_factory_make ("deinterlace", "deint");
-    self->video_convert = gst_element_factory_make ("videoconvert", "vconv");
-    self->videobalance  = gst_element_factory_make ("videobalance", "vbal");
-    self->subtitle_bin  = gst_element_factory_make ("subtitleoverlay", "sub_bin");
-
-    /* Use appsink to pull samples into VlxVideoWidget */
-    self->video_sink = gst_element_factory_make ("appsink", "vsink");
-    if (self->video_sink) {
-        GstCaps *caps = gst_caps_from_string ("video/x-raw(memory:GLMemory), format=RGBA; video/x-raw, format=RGBA");
-        g_object_set (self->video_sink,
-                      "caps", caps,
-                      "max-buffers", 2,
-                      "drop", TRUE,
-                      "sync", TRUE,
-                      NULL);
-        gst_caps_unref (caps);
-    }
-
-    /* Audio branch */
-    self->audio_convert   = gst_element_factory_make ("audioconvert", "aconv");
-    self->audio_resample  = gst_element_factory_make ("audioresample", "aresample");
-    self->equalizer       = gst_element_factory_make ("equalizer-10bands", "eq");
-    self->audio_volume    = gst_element_factory_make ("volume", "avol");
-
-    /* Try pipewiresink, fall back to pulsesink or autoaudiosink */
-    self->audio_sink = gst_element_factory_make ("pipewiresink", "asink");
-    if (!self->audio_sink)
-        self->audio_sink = gst_element_factory_make ("pulsesink", "asink");
-    if (!self->audio_sink)
-        self->audio_sink = gst_element_factory_make ("autoaudiosink", "asink");
-
-    /* Create isolated bins for branches to prevent unconnected sinks from blocking PREROLL */
-    self->video_bin = gst_bin_new ("video_bin");
-    g_object_ref_sink (self->video_bin);
-    gst_bin_add_many (GST_BIN (self->video_bin),
-                      self->deinterlace, self->video_convert, self->videobalance, self->subtitle_bin, self->video_sink, NULL);
-    gst_element_link_many (self->deinterlace, self->video_convert, self->videobalance, self->subtitle_bin, self->video_sink, NULL);
-
-    /* Ghost pad for video data input */
-    GstPad *video_pad = gst_element_get_static_pad (self->deinterlace, "sink");
-    gst_element_add_pad (self->video_bin, gst_ghost_pad_new ("sink", video_pad));
-    gst_object_unref (video_pad);
-
-    /* Ghost pad for subtitle data — exposes subtitleoverlay's subtitle_sink
-     * so that on_pad_added can link subtitle pads from uridecodebin3
-     * (at the main pipeline level) into the nested video_bin. */
-    GstPad *sub_pad = gst_element_request_pad_simple (self->subtitle_bin, "subtitle_sink");
-    if (sub_pad) {
-        gst_element_add_pad (self->video_bin, gst_ghost_pad_new ("subtitle_sink", sub_pad));
-        gst_object_unref (sub_pad);
-    }
-
-    self->audio_bin = gst_bin_new ("audio_bin");
-    g_object_ref_sink (self->audio_bin);
-    gst_bin_add_many (GST_BIN (self->audio_bin),
-                      self->audio_convert, self->audio_resample, self->equalizer, self->audio_volume,  self->audio_sink, NULL);
-    gst_element_link_many (self->audio_convert, self->audio_resample, self->equalizer, self->audio_volume, self->audio_sink, NULL);
-    GstPad *audio_pad = gst_element_get_static_pad (self->audio_convert, "sink");
-    gst_element_add_pad (self->audio_bin, gst_ghost_pad_new ("sink", audio_pad));
-    gst_object_unref (audio_pad);
-
-    /* Add only the demuxer to the main pipeline initially */
-    gst_bin_add (GST_BIN (self->pipeline), self->uridecodebin);
-
-    /* Connect dynamic pad signals */
-    g_signal_connect (self->uridecodebin, "pad-added",
-                      G_CALLBACK (on_pad_added), self);
-
-    /* Setup equalizer from settings */
-    if (!self->settings)
-        self->settings = g_settings_new ("io.github.velox");
-    on_eq_gains_changed (self->settings, "equalizer-gains", self);
-    self->eq_sig_id = g_signal_connect (self->settings, "changed::equalizer-gains",
-                                        G_CALLBACK (on_eq_gains_changed), self);
-
-    /* Setup videobalance from settings */
-    on_video_balance_changed (self->settings, NULL, self);
-    self->vid_sig_id = g_signal_connect (self->settings, "changed",
-                                         G_CALLBACK (on_video_balance_changed), self);
-
-    /* Setup video settings (deinterlace) */
-    on_video_settings_changed (self->settings, NULL, self);
-    self->deint_sig_id = g_signal_connect (self->settings, "changed::deinterlace",
-                                           G_CALLBACK (on_video_settings_changed), self);
-
-    /* Watch bus */
-    self->bus = gst_pipeline_get_bus (GST_PIPELINE (self->pipeline));
-    self->bus_watch_id = gst_bus_add_watch (self->bus, bus_message_cb, self);
-    gst_object_unref (self->bus);
-
-    /* Detect hardware acceleration */
-    self->hwaccel = vlx_hwaccel_detect ();
-    VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE,
-                  "HW accel: %s",
-                  vlx_hwaccel_type_to_string (self->hwaccel));
-}
-
-/* ── GObject boilerplate ───────────────────────────────────────────────────── */
-static gpointer
-seek_thread_func (gpointer data)
-{
-    VlxPipelineManager *self = VLX_PIPELINE_MANAGER (data);
-    g_mutex_lock (&self->seek_mutex);
+static gpointer seek_thread_func(gpointer data) {
+    VlxPipelineManager *self = VLX_PIPELINE_MANAGER(data);
+    g_mutex_lock(&self->seek_mutex);
     while (!self->seek_exit) {
         if (self->seek_target_us >= 0) {
             gint64 target = self->seek_target_us;
             self->seek_target_us = -1;
-
-            /* Take a ref on the pipeline while holding the lock.
-             * This prevents the main thread from freeing the pipeline
-             * out from under us during the (potentially slow) seek.
-             */
-            GstElement *pipe = self->pipeline
-                ? gst_object_ref (self->pipeline) : NULL;
+            GstElement *pipe = self->pipeline ? gst_object_ref(self->pipeline) : NULL;
             self->seek_in_progress = TRUE;
-            g_mutex_unlock (&self->seek_mutex);
+            g_mutex_unlock(&self->seek_mutex);
 
             if (pipe) {
-                gst_element_seek_simple (pipe,
-                                         GST_FORMAT_TIME,
-                                         GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT | GST_SEEK_FLAG_SKIP,
-                                         target * GST_USECOND);
-                gst_object_unref (pipe);
+                gst_element_seek_simple(pipe,
+                                        GST_FORMAT_TIME,
+                                        GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT,
+                                        target * GST_USECOND);
+                gst_object_unref(pipe);
             }
-            g_mutex_lock (&self->seek_mutex);
+            g_mutex_lock(&self->seek_mutex);
             self->seek_in_progress = FALSE;
-            g_cond_signal (&self->seek_cond);
+            g_cond_signal(&self->seek_cond);
         } else {
-            g_cond_wait (&self->seek_cond, &self->seek_mutex);
+            g_cond_wait(&self->seek_cond, &self->seek_mutex);
         }
     }
-    g_mutex_unlock (&self->seek_mutex);
+    g_mutex_unlock(&self->seek_mutex);
     return NULL;
 }
 
-static void
-vlx_pipeline_manager_finalize (GObject *obj)
-{
-    VlxPipelineManager *self = VLX_PIPELINE_MANAGER (obj);
+static gboolean bus_message_cb(GstBus *bus, GstMessage *msg, gpointer data) {
+    VlxPipelineManager *self = VLX_PIPELINE_MANAGER(data);
+    (void)bus;
 
-    g_mutex_lock (&self->seek_mutex);
-    self->seek_exit = TRUE;
-    g_cond_signal (&self->seek_cond);
-    g_mutex_unlock (&self->seek_mutex);
-
-    if (self->seek_thread) {
-        g_thread_join (self->seek_thread);
-        self->seek_thread = NULL;
+    switch (GST_MESSAGE_TYPE(msg)) {
+        case GST_MESSAGE_STATE_CHANGED: {
+            if (GST_MESSAGE_SRC(msg) != GST_OBJECT(self->pipeline))
+                break;
+            GstState old_st, new_st, pending;
+            gst_message_parse_state_changed(msg, &old_st, &new_st, &pending);
+            VLX_LOG_DEBUG(VLX_LOG_DOMAIN_PIPELINE, "State: %s → %s", gst_element_state_get_name(old_st), gst_element_state_get_name(new_st));
+            if (self->state_cb)
+                self->state_cb(self, old_st, new_st, self->cb_data);
+            break;
+        }
+        case GST_MESSAGE_EOS:
+            VLX_LOG_INFO(VLX_LOG_DOMAIN_PIPELINE, "EOS received");
+            if (self->eos_cb)
+                self->eos_cb(self, self->cb_data);
+            break;
+        case GST_MESSAGE_ERROR: {
+            GError *err = NULL;
+            gchar *dbg = NULL;
+            gst_message_parse_error(msg, &err, &dbg);
+            VLX_LOG_ERROR(VLX_LOG_DOMAIN_PIPELINE, "Pipeline error: %s (debug: %s)", err->message, dbg ? dbg : "none");
+            if (self->error_cb)
+                self->error_cb(self, err->message, self->cb_data);
+            g_error_free(err);
+            g_free(dbg);
+            break;
+        }
+        case GST_MESSAGE_BUFFERING: {
+            gint percent = 0;
+            gst_message_parse_buffering(msg, &percent);
+            if (self->buf_cb)
+                self->buf_cb(self, percent, self->cb_data);
+            break;
+        }
+        case GST_MESSAGE_STREAM_COLLECTION: {
+            GstStreamCollection *collection = NULL;
+            gst_message_parse_stream_collection(msg, &collection);
+            if (collection) {
+                g_set_object(&self->collection, collection);
+                if (self->coll_cb)
+                    self->coll_cb(self, collection, self->cb_data);
+                gst_object_unref(collection);
+            }
+            break;
+        }
+        case GST_MESSAGE_STREAMS_SELECTED: {
+            if (self->active_stream_ids) {
+                g_list_free_full(self->active_stream_ids, g_free);
+                self->active_stream_ids = NULL;
+            }
+            guint n = gst_message_streams_selected_get_size(msg);
+            for (guint i = 0; i < n; i++) {
+                GstStream *stream = gst_message_streams_selected_get_stream(msg, i);
+                if (stream) {
+                    self->active_stream_ids = g_list_append(self->active_stream_ids, g_strdup(gst_stream_get_stream_id(stream)));
+                    gst_object_unref(stream);
+                }
+            }
+            break;
+        }
+        case GST_MESSAGE_ASYNC_DONE:
+            VLX_LOG_DEBUG(VLX_LOG_DOMAIN_PIPELINE, "Async done (seek complete)");
+            break;
+        case GST_MESSAGE_TOC: {
+            GstToc *toc = NULL;
+            gboolean updated = FALSE;
+            gst_message_parse_toc(msg, &toc, &updated);
+            if (toc) {
+                VLX_LOG_INFO(VLX_LOG_DOMAIN_PIPELINE, "TOC received (updated=%s)", updated ? "yes" : "no");
+                if (self->toc_cb)
+                    self->toc_cb(self, toc, self->cb_data);
+                gst_toc_unref(toc);
+            }
+            break;
+        }
+        default:
+            break;
     }
-    g_mutex_clear (&self->seek_mutex);
-    g_cond_clear (&self->seek_cond);
+    return G_SOURCE_CONTINUE;
+}
+
+static void on_video_balance_changed(GSettings *settings, const gchar *key, gpointer data) {
+    VlxPipelineManager *self = VLX_PIPELINE_MANAGER(data);
+    if (!self->pipeline) return;
+
+    gchar *filter_desc = NULL;
+    if (key == NULL || g_strcmp0(key, "video-brightness") == 0 ||
+        g_strcmp0(key, "video-contrast") == 0 ||
+        g_strcmp0(key, "video-saturation") == 0 ||
+        g_strcmp0(key, "video-hue") == 0) {
+        gdouble brightness = g_settings_get_double(settings, "video-brightness");
+        gdouble contrast = g_settings_get_double(settings, "video-contrast");
+        gdouble saturation = g_settings_get_double(settings, "video-saturation");
+        gdouble hue = g_settings_get_double(settings, "video-hue");
+        filter_desc = g_strdup_printf("videobalance brightness=%f contrast=%f saturation=%f hue=%f",
+                                      brightness, contrast, saturation, hue);
+    }
+
+    if (filter_desc) {
+        GstElement *filter = gst_parse_bin_from_description(filter_desc, TRUE, NULL);
+        if (filter) {
+            g_object_set(self->playbin, "video-filter", filter, NULL);
+            gst_object_unref(filter);
+        }
+        g_free(filter_desc);
+    }
+}
+
+static void build_pipeline(VlxPipelineManager *self, const gchar *uri) {
+    g_mutex_lock(&self->seek_mutex);
+    self->seek_target_us = -1;
+    while (self->seek_in_progress) {
+        g_cond_wait(&self->seek_cond, &self->seek_mutex);
+    }
+    g_mutex_unlock(&self->seek_mutex);
 
     if (self->pipeline) {
         if (self->settings) {
             if (self->eq_sig_id) {
-                g_signal_handler_disconnect (self->settings, self->eq_sig_id);
+                g_signal_handler_disconnect(self->settings, self->eq_sig_id);
                 self->eq_sig_id = 0;
             }
             if (self->vid_sig_id) {
-                g_signal_handler_disconnect (self->settings, self->vid_sig_id);
+                g_signal_handler_disconnect(self->settings, self->vid_sig_id);
                 self->vid_sig_id = 0;
             }
             if (self->deint_sig_id) {
-                g_signal_handler_disconnect (self->settings, self->deint_sig_id);
+                g_signal_handler_disconnect(self->settings, self->deint_sig_id);
                 self->deint_sig_id = 0;
             }
         }
-        gst_element_set_state (self->pipeline, GST_STATE_NULL);
+        gst_element_set_state(self->pipeline, GST_STATE_NULL);
         if (self->bus_watch_id) {
-            g_source_remove (self->bus_watch_id);
+            g_source_remove(self->bus_watch_id);
             self->bus_watch_id = 0;
         }
-        gst_object_unref (self->pipeline);
+        if (self->active_stream_ids) {
+            g_list_free_full(self->active_stream_ids, g_free);
+            self->active_stream_ids = NULL;
+        }
+        g_clear_object(&self->collection);
+
+        self->playbin = NULL;
+        self->video_sink = NULL;
+        self->audio_sink = NULL;
+        gst_object_unref(self->pipeline);
+        self->pipeline = NULL;
+    }
+
+    self->pipeline = gst_pipeline_new("velox-pipeline");
+    self->playbin = gst_element_factory_make("playbin3", "playbin");
+    self->video_sink = gst_element_factory_make("appsink", "vsink");
+
+    if (self->video_sink) {
+        GstCaps *caps = gst_caps_from_string("video/x-raw(memory:GLMemory), format=RGBA; video/x-raw, format=RGBA");
+        g_object_set(self->video_sink, "caps", caps, "max-buffers", 2, "drop", TRUE, "sync", TRUE, NULL);
+        gst_caps_unref(caps);
+        g_object_set(self->playbin, "video-sink", self->video_sink, NULL);
+    }
+
+    self->audio_sink = gst_element_factory_make("pipewiresink", "asink");
+    if (!self->audio_sink)
+        self->audio_sink = gst_element_factory_make("pulsesink", "asink");
+    if (!self->audio_sink)
+        self->audio_sink = gst_element_factory_make("autoaudiosink", "asink");
+    if (self->audio_sink)
+        g_object_set(self->playbin, "audio-sink", self->audio_sink, NULL);
+
+    g_object_set(self->playbin, "uri", uri, NULL);
+    gst_bin_add(GST_BIN(self->pipeline), self->playbin);
+
+    if (!self->settings)
+        self->settings = g_settings_new("io.github.velox");
+
+    on_video_balance_changed(self->settings, NULL, self);
+    self->vid_sig_id = g_signal_connect(self->settings, "changed", G_CALLBACK(on_video_balance_changed), self);
+
+    self->bus = gst_pipeline_get_bus(GST_PIPELINE(self->pipeline));
+    self->bus_watch_id = gst_bus_add_watch(self->bus, bus_message_cb, self);
+    gst_object_unref(self->bus);
+}
+
+static void vlx_pipeline_manager_finalize(GObject *obj) {
+    VlxPipelineManager *self = VLX_PIPELINE_MANAGER(obj);
+
+    g_mutex_lock(&self->seek_mutex);
+    self->seek_exit = TRUE;
+    g_cond_signal(&self->seek_cond);
+    g_mutex_unlock(&self->seek_mutex);
+
+    if (self->seek_thread) {
+        g_thread_join(self->seek_thread);
+        self->seek_thread = NULL;
+    }
+    g_mutex_clear(&self->seek_mutex);
+    g_cond_clear(&self->seek_cond);
+
+    if (self->pipeline) {
+        if (self->settings) {
+            if (self->eq_sig_id) {
+                g_signal_handler_disconnect(self->settings, self->eq_sig_id);
+                self->eq_sig_id = 0;
+            }
+            if (self->vid_sig_id) {
+                g_signal_handler_disconnect(self->settings, self->vid_sig_id);
+                self->vid_sig_id = 0;
+            }
+            if (self->deint_sig_id) {
+                g_signal_handler_disconnect(self->settings, self->deint_sig_id);
+                self->deint_sig_id = 0;
+            }
+        }
+        gst_element_set_state(self->pipeline, GST_STATE_NULL);
+        if (self->bus_watch_id) {
+            g_source_remove(self->bus_watch_id);
+            self->bus_watch_id = 0;
+        }
+        gst_object_unref(self->pipeline);
     }
     if (self->settings) {
-        g_object_unref (self->settings);
+        g_object_unref(self->settings);
         self->settings = NULL;
     }
-    g_clear_object (&self->collection);
+    g_clear_object(&self->collection);
     if (self->active_stream_ids) {
-        g_list_free_full (self->active_stream_ids, g_free);
+        g_list_free_full(self->active_stream_ids, g_free);
         self->active_stream_ids = NULL;
     }
 
-    /* Only unref bins that were NOT added to the pipeline */
-    if (self->video_bin && !self->video_branch_added) {
-        gst_object_unref (self->video_bin);
-    }
-    self->video_bin = NULL;
-
-    if (self->audio_bin && !self->audio_branch_added) {
-        gst_object_unref (self->audio_bin);
-    }
-    self->audio_bin = NULL;
-
-    G_OBJECT_CLASS (vlx_pipeline_manager_parent_class)->finalize (obj);
+    G_OBJECT_CLASS(vlx_pipeline_manager_parent_class)->finalize(obj);
 }
 
-static void
-vlx_pipeline_manager_class_init (VlxPipelineManagerClass *klass)
-{
-    G_OBJECT_CLASS (klass)->finalize = vlx_pipeline_manager_finalize;
+static void vlx_pipeline_manager_class_init(VlxPipelineManagerClass *klass) {
+    GObjectClass *obj_class = G_OBJECT_CLASS(klass);
+    obj_class->finalize = vlx_pipeline_manager_finalize;
 }
 
-static void
-vlx_pipeline_manager_init (VlxPipelineManager *self)
-{
+static void vlx_pipeline_manager_init(VlxPipelineManager *self) {
     self->hwaccel = VLX_HWACCEL_NONE;
-    
-    g_mutex_init (&self->seek_mutex);
-    g_cond_init (&self->seek_cond);
+    g_mutex_init(&self->seek_mutex);
+    g_cond_init(&self->seek_cond);
     self->seek_target_us = -1;
     self->seek_exit = FALSE;
     self->seek_in_progress = FALSE;
-    self->seek_thread = g_thread_new ("vlx-seek", seek_thread_func, self);
+    self->seek_thread = g_thread_new("vlx-seek", seek_thread_func, self);
 }
 
-/* ── Public API ────────────────────────────────────────────────────────────── */
-VlxPipelineManager *
-vlx_pipeline_manager_new (void)
-{
-    return g_object_new (VLX_TYPE_PIPELINE_MANAGER, NULL);
+VlxPipelineManager *vlx_pipeline_manager_new(void) {
+    return g_object_new(VLX_TYPE_PIPELINE_MANAGER, NULL);
 }
 
-void
-vlx_pipeline_manager_set_callbacks (VlxPipelineManager    *self,
-                                    VlxPipelineStateCb     state_cb,
-                                    VlxPipelineEosCb       eos_cb,
-                                    VlxPipelineErrorCb     error_cb,
-                                    VlxPipelineBufferingCb buf_cb,
-                                    VlxPipelineCollectionCb coll_cb,
-                                    VlxPipelineTocCb        toc_cb,
-                                    gpointer               data)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
+void vlx_pipeline_manager_set_callbacks(VlxPipelineManager *self, VlxPipelineStateCb state_cb, VlxPipelineEosCb eos_cb, VlxPipelineErrorCb error_cb, VlxPipelineBufferingCb buf_cb, VlxPipelineCollectionCb coll_cb, VlxPipelineTocCb toc_cb, gpointer data) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
     self->state_cb = state_cb;
-    self->eos_cb   = eos_cb;
+    self->eos_cb = eos_cb;
     self->error_cb = error_cb;
-    self->buf_cb   = buf_cb;
-    self->coll_cb  = coll_cb;
-    self->toc_cb   = toc_cb;
-    self->cb_data  = data;
+    self->buf_cb = buf_cb;
+    self->coll_cb = coll_cb;
+    self->toc_cb = toc_cb;
+    self->cb_data = data;
 }
 
-void
-vlx_pipeline_manager_open (VlxPipelineManager *self, const gchar *uri)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
-    build_pipeline (self, uri);
-    gst_element_set_state (self->pipeline, GST_STATE_PLAYING);
+void vlx_pipeline_manager_open(VlxPipelineManager *self, const gchar *uri) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
+    build_pipeline(self, uri);
+    gst_element_set_state(self->pipeline, GST_STATE_PLAYING);
 }
 
-void
-vlx_pipeline_manager_set_state (VlxPipelineManager *self, GstState state)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
+void vlx_pipeline_manager_set_state(VlxPipelineManager *self, GstState state) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
     if (self->pipeline)
-        gst_element_set_state (self->pipeline, state);
+        gst_element_set_state(self->pipeline, state);
 }
 
-void
-vlx_pipeline_manager_seek (VlxPipelineManager *self, gint64 position_us)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
+void vlx_pipeline_manager_seek(VlxPipelineManager *self, gint64 position_us) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
     if (!self->pipeline) return;
 
-    g_mutex_lock (&self->seek_mutex);
+    g_mutex_lock(&self->seek_mutex);
     self->seek_target_us = position_us;
-    g_cond_signal (&self->seek_cond);
-    g_mutex_unlock (&self->seek_mutex);
+    g_cond_signal(&self->seek_cond);
+    g_mutex_unlock(&self->seek_mutex);
 }
 
-gint64
-vlx_pipeline_manager_get_position (VlxPipelineManager *self)
-{
-    g_return_val_if_fail (VLX_IS_PIPELINE_MANAGER (self), -1);
+gint64 vlx_pipeline_manager_get_position(VlxPipelineManager *self) {
+    g_return_val_if_fail(VLX_IS_PIPELINE_MANAGER(self), -1);
     if (!self->pipeline) return -1;
 
     gint64 pos = -1;
-    if (gst_element_query_position (self->pipeline, GST_FORMAT_TIME, &pos))
+    if (gst_element_query_position(self->pipeline, GST_FORMAT_TIME, &pos))
         return pos / GST_USECOND;
     return -1;
 }
 
-gint64
-vlx_pipeline_manager_get_duration (VlxPipelineManager *self)
-{
-    g_return_val_if_fail (VLX_IS_PIPELINE_MANAGER (self), 0);
+gint64 vlx_pipeline_manager_get_duration(VlxPipelineManager *self) {
+    g_return_val_if_fail(VLX_IS_PIPELINE_MANAGER(self), 0);
     if (!self->pipeline) return 0;
 
     gint64 dur = 0;
-    if (gst_element_query_duration (self->pipeline, GST_FORMAT_TIME, &dur))
+    if (gst_element_query_duration(self->pipeline, GST_FORMAT_TIME, &dur))
         return dur / GST_USECOND;
     return 0;
 }
 
-void
-vlx_pipeline_manager_set_volume (VlxPipelineManager *self, gdouble volume)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
-    if (self->audio_volume)
-        g_object_set (self->audio_volume, "volume", volume, NULL);
+void vlx_pipeline_manager_set_volume(VlxPipelineManager *self, gdouble volume) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
+    if (self->playbin)
+        g_object_set(self->playbin, "volume", volume, NULL);
 }
 
-void
-vlx_pipeline_manager_set_muted (VlxPipelineManager *self, gboolean muted)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
-    if (self->audio_volume)
-        g_object_set (self->audio_volume, "mute", muted, NULL);
+void vlx_pipeline_manager_set_muted(VlxPipelineManager *self, gboolean muted) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
+    if (self->playbin)
+        g_object_set(self->playbin, "mute", muted, NULL);
 }
 
-void
-vlx_pipeline_manager_set_rate (VlxPipelineManager *self, gdouble rate)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
+void vlx_pipeline_manager_set_rate(VlxPipelineManager *self, gdouble rate) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
     if (!self->pipeline) return;
 
     gint64 pos = 0;
-    gst_element_query_position (self->pipeline, GST_FORMAT_TIME, &pos);
+    gst_element_query_position(self->pipeline, GST_FORMAT_TIME, &pos);
 
     if (rate > 0.0) {
-        gst_element_seek (self->pipeline, rate,
-                          GST_FORMAT_TIME,
-                          GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE,
-                          GST_SEEK_TYPE_SET, pos,
-                          GST_SEEK_TYPE_SET, -1);
+        gst_element_seek(self->pipeline, rate, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT, GST_SEEK_TYPE_SET, pos, GST_SEEK_TYPE_SET, -1);
     }
 }
 
-void
-vlx_pipeline_manager_select_audio (VlxPipelineManager *self, gint index)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
-    if (self->uridecodebin)
-        g_object_set (self->uridecodebin, "current-audio", index, NULL);
+void vlx_pipeline_manager_select_audio(VlxPipelineManager *self, gint index) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
+    if (self->playbin)
+        g_object_set(self->playbin, "current-audio", index, NULL);
 }
 
-void
-vlx_pipeline_manager_select_subtitle (VlxPipelineManager *self, gint index)
-{
-    /* Not implemented yet */
-    (void) self; (void) index;
+void vlx_pipeline_manager_select_subtitle(VlxPipelineManager *self, gint index) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
+    if (self->playbin)
+        g_object_set(self->playbin, "current-text", index, NULL);
 }
 
-void
-vlx_pipeline_manager_set_subtitle_delay (VlxPipelineManager *self, gint64 delay_us)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
-    if (self->subtitle_bin) {
-        g_object_set (self->subtitle_bin, "ts-offset", delay_us * 1000, NULL);
-    }
-}
-
-gint64
-vlx_pipeline_manager_get_subtitle_delay (VlxPipelineManager *self)
-{
-    g_return_val_if_fail (VLX_IS_PIPELINE_MANAGER (self), 0);
-    gint64 offset_ns = 0;
-    if (self->subtitle_bin) {
-        g_object_get (self->subtitle_bin, "ts-offset", &offset_ns, NULL);
-    }
-    return offset_ns / 1000;
-}
-
-void
-vlx_pipeline_manager_set_stream (VlxPipelineManager *self, const gchar *new_stream_id)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
+void vlx_pipeline_manager_set_stream(VlxPipelineManager *self, const gchar *stream_id) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
     if (!self->pipeline || !self->collection || !self->active_stream_ids) return;
-
-    GstStreamType new_type = GST_STREAM_TYPE_UNKNOWN;
-    for (guint i = 0; i < gst_stream_collection_get_size (self->collection); i++) {
-        GstStream *s = gst_stream_collection_get_stream (self->collection, i);
-        if (g_strcmp0 (gst_stream_get_stream_id (s), new_stream_id) == 0) {
-            new_type = gst_stream_get_stream_type (s);
-            break;
-        }
-    }
-
-    if (new_type == GST_STREAM_TYPE_UNKNOWN) {
-        VLX_LOG_ERROR (VLX_LOG_DOMAIN_PIPELINE, "Unknown stream ID: %s", new_stream_id);
-        return;
-    }
 
     GList *new_list = NULL;
     for (GList *l = self->active_stream_ids; l != NULL; l = l->next) {
         const gchar *sid = l->data;
-        GstStreamType stype = GST_STREAM_TYPE_UNKNOWN;
-        
-        for (guint i = 0; i < gst_stream_collection_get_size (self->collection); i++) {
-            GstStream *s = gst_stream_collection_get_stream (self->collection, i);
-            if (g_strcmp0 (gst_stream_get_stream_id (s), sid) == 0) {
-                stype = gst_stream_get_stream_type (s);
-                break;
-            }
-        }
-
-        if (stype != new_type) {
-            new_list = g_list_append (new_list, g_strdup (sid));
-        }
+        new_list = g_list_append(new_list, g_strdup(sid));
     }
+    new_list = g_list_append(new_list, g_strdup(stream_id));
 
-    new_list = g_list_append (new_list, g_strdup (new_stream_id));
-
-    GstEvent *event = gst_event_new_select_streams (new_list);
-    if (!gst_element_send_event (self->pipeline, event)) {
-        VLX_LOG_ERROR (VLX_LOG_DOMAIN_PIPELINE, "Failed to send SELECT_STREAMS event");
+    GstEvent *event = gst_event_new_select_streams(new_list);
+    if (!gst_element_send_event(self->pipeline, event)) {
+        VLX_LOG_ERROR(VLX_LOG_DOMAIN_PIPELINE, "Failed to send SELECT_STREAMS event");
     } else {
-        VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE, "Sent SELECT_STREAMS event for stream %s", new_stream_id);
+        VLX_LOG_INFO(VLX_LOG_DOMAIN_PIPELINE, "Sent SELECT_STREAMS event for stream %s", stream_id);
     }
-    
-    g_list_free_full (new_list, g_free);
+
+    g_list_free_full(new_list, g_free);
 }
 
-void
-vlx_pipeline_manager_select_streams (VlxPipelineManager *self, GList *stream_ids)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
-    if (!self->pipeline) return;
-
-    GstEvent *event = gst_event_new_select_streams (stream_ids);
-    if (!gst_element_send_event (self->pipeline, event)) {
-        VLX_LOG_ERROR (VLX_LOG_DOMAIN_PIPELINE, "Failed to send SELECT_STREAMS event");
-    } else {
-        VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE, "Sent SELECT_STREAMS event");
+void vlx_pipeline_manager_set_subtitle_delay(VlxPipelineManager *self, gint64 delay_us) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
+    if (self->playbin) {
+        g_object_set(self->playbin, "text-offset", delay_us * GST_USECOND, NULL);
     }
 }
 
-GstElement *
-vlx_pipeline_manager_get_video_sink (VlxPipelineManager *self)
-{
-    g_return_val_if_fail (VLX_IS_PIPELINE_MANAGER (self), NULL);
+gint64 vlx_pipeline_manager_get_subtitle_delay(VlxPipelineManager *self) {
+    g_return_val_if_fail(VLX_IS_PIPELINE_MANAGER(self), 0);
+    gint64 offset = 0;
+    if (self->playbin) {
+        g_object_get(self->playbin, "text-offset", &offset, NULL);
+    }
+    return offset / GST_USECOND;
+}
+
+GstElement *vlx_pipeline_manager_get_video_sink(VlxPipelineManager *self) {
+    g_return_val_if_fail(VLX_IS_PIPELINE_MANAGER(self), NULL);
     return self->video_sink;
 }
 
-/* ── Video balance live setters ──────────────────────────────────────────── */
-void
-vlx_pipeline_manager_set_brightness (VlxPipelineManager *self, gdouble val)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
-    if (self->videobalance)
-        g_object_set (self->videobalance, "brightness", CLAMP (val, -1.0, 1.0), NULL);
+void vlx_pipeline_manager_set_brightness(VlxPipelineManager *self, gdouble val) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
+    if (self->settings) {
+        g_settings_set_double(self->settings, "video-brightness", CLAMP(val, -1.0, 1.0));
+    }
 }
 
-void
-vlx_pipeline_manager_set_contrast (VlxPipelineManager *self, gdouble val)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
-    if (self->videobalance)
-        g_object_set (self->videobalance, "contrast", CLAMP (val, 0.0, 2.0), NULL);
+void vlx_pipeline_manager_set_contrast(VlxPipelineManager *self, gdouble val) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
+    if (self->settings) {
+        g_settings_set_double(self->settings, "video-contrast", CLAMP(val, 0.0, 2.0));
+    }
 }
 
-void
-vlx_pipeline_manager_set_saturation (VlxPipelineManager *self, gdouble val)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
-    if (self->videobalance)
-        g_object_set (self->videobalance, "saturation", CLAMP (val, 0.0, 2.0), NULL);
+void vlx_pipeline_manager_set_saturation(VlxPipelineManager *self, gdouble val) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
+    if (self->settings) {
+        g_settings_set_double(self->settings, "video-saturation", CLAMP(val, 0.0, 2.0));
+    }
 }
 
-void
-vlx_pipeline_manager_set_hue (VlxPipelineManager *self, gdouble val)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
-    if (self->videobalance)
-        g_object_set (self->videobalance, "hue", CLAMP (val, -1.0, 1.0), NULL);
+void vlx_pipeline_manager_set_hue(VlxPipelineManager *self, gdouble val) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
+    if (self->settings) {
+        g_settings_set_double(self->settings, "video-hue", CLAMP(val, -1.0, 1.0));
+    }
 }
 
-/* ── External subtitle file ──────────────────────────────────────────────── */
-void
-vlx_pipeline_manager_load_subtitle_file (VlxPipelineManager *self,
-                                         const gchar        *path)
-{
-    g_return_if_fail (VLX_IS_PIPELINE_MANAGER (self));
-    g_return_if_fail (path != NULL);
-    if (!self->uridecodebin) return;
+void vlx_pipeline_manager_load_subtitle_file(VlxPipelineManager *self, const gchar *path) {
+    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
+    g_return_if_fail(path != NULL);
+    if (!self->playbin) return;
 
-    gchar *sub_uri = gst_filename_to_uri (path, NULL);
+    gchar *sub_uri = gst_filename_to_uri(path, NULL);
     if (!sub_uri) return;
 
-    VLX_LOG_INFO (VLX_LOG_DOMAIN_PIPELINE,
-                  "Loading external subtitle: %s", sub_uri);
-
-    g_object_set (self->uridecodebin, "suburi", sub_uri, NULL);
-    g_free (sub_uri);
+    VLX_LOG_INFO(VLX_LOG_DOMAIN_PIPELINE, "Loading external subtitle: %s", sub_uri);
+    g_object_set(self->playbin, "suburi", sub_uri, NULL);
+    g_free(sub_uri);
 }
