@@ -47,11 +47,7 @@ struct _VlxWindow {
     /* P3 — Power user */
     VlxHistory           *history;
 
-    /* P4 — Video balance (live, clamped) */
-    gdouble               brightness;   /* -1.0 .. 1.0, default 0.0 */
-    gdouble               contrast;     /*  0.0 .. 2.0, default 1.0 */
-    gdouble               saturation;   /*  0.0 .. 2.0, default 1.0 */
-    gdouble               hue;          /* -1.0 .. 1.0, default 0.0 */
+    /* P4 — Video balance (removed) */
 };
 
 G_DEFINE_TYPE (VlxWindow, vlx_window, ADW_TYPE_APPLICATION_WINDOW)
@@ -917,22 +913,6 @@ on_key_pressed (GtkEventControllerKey *ctrl,
         return TRUE;
 
     /* ── Video balance ──────────────────────────────────────────────── */
-    case GDK_KEY_KP_Add:
-    case GDK_KEY_plus:
-        /* Brightness up (+0.05, max 1.0) */
-        self->brightness = CLAMP (self->brightness + 0.05, -1.0, 1.0);
-        vlx_player_set_brightness (self->player, self->brightness);
-        vlx_window_show_hud (self, "\u2600 Brightness: %+.0f%%",
-                             self->brightness * 100);
-        return TRUE;
-    case GDK_KEY_KP_Subtract:
-    case GDK_KEY_minus:
-        /* Brightness down */
-        self->brightness = CLAMP (self->brightness - 0.05, -1.0, 1.0);
-        vlx_player_set_brightness (self->player, self->brightness);
-        vlx_window_show_hud (self, "\u2600 Brightness: %+.0f%%",
-                             self->brightness * 100);
-        return TRUE;
     case GDK_KEY_question:
         /* ? = keyboard cheat sheet */
         vlx_window_show_cheat_sheet (self);
@@ -1024,7 +1004,6 @@ vlx_window_show_cheat_sheet (VlxWindow *self)
         { "g",          "Set A / B / clear loop"},
         { "G",          "Clear A-B loop"        },
         { "c / C",      "Next / Prev chapter"   },
-        { "+ / -",      "Brightness ±5%"        },
         { "i",          "Media info"            },
         { "Ctrl+O",     "Open file"             },
         { "Ctrl+U",     "Open URL"              },
@@ -1100,11 +1079,7 @@ vlx_window_init (VlxWindow *self)
     self->bus      = vlx_event_bus_get_default ();
     self->history  = vlx_history_get_default ();
 
-    /* P4 — balance defaults */
-    self->brightness = 0.0;
-    self->contrast   = 1.0;
-    self->saturation = 1.0;
-    self->hue        = 0.0;
+    /* P4 — balance defaults (removed) */
 
     /* ── Header bar ───────────────────────────────────────────────── */
     self->hbar = GTK_WIDGET (adw_header_bar_new ());

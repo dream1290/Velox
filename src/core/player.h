@@ -56,8 +56,6 @@ void           vlx_player_set_chapters       (VlxPlayer    *self,
                                               const GArray *chapters_us);
 void           vlx_player_seek_chapter       (VlxPlayer *self, gint delta);
 
-/* Video balance */
-void           vlx_player_set_brightness     (VlxPlayer *self, gdouble val);
 
 /* External subtitle file */
 void           vlx_player_load_subtitle_file (VlxPlayer *self,

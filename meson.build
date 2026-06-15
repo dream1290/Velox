@@ -25,7 +25,6 @@ pango       = dependency('pango')
 pangocairo  = dependency('pangocairo')
 epoxy       = dependency('epoxy')
 sqlite3     = dependency('sqlite3')
-gmodule     = dependency('gmodule-2.0')
 math        = meson.get_compiler('c').find_library('m', required : false)
 
 velox_deps = [
@@ -44,7 +43,6 @@ velox_deps = [
   pangocairo,
   epoxy,
   sqlite3,
-  gmodule,
   math,
 ]
 
@@ -65,7 +63,6 @@ velox_sources = files(
   'src/core/player.c',
   'src/core/event_bus.c',
   'src/core/playlist.c',
-  'src/core/plugin.c',
 
   # Pipeline (L3 — Media Engine)
   'src/pipeline/pipeline.c',
@@ -105,8 +102,7 @@ executable('velox',
   install_dir     : get_option('bindir'),
 )
 
-# ── Data files ──────────────────────────────────────────────────────────────
-subdir('data')
+
 
 
 # ── Tests (stub) ─────────────────────────────────────────────────────────────

@@ -27,7 +27,6 @@ struct _VlxApplication {
     VlxWindow        *window;
     VlxMprisProvider *mpris;
     VlxInhibitManager *inhibit;
-    VlxPluginManager *plugin_mgr;
 
 };
 
@@ -78,15 +77,7 @@ vlx_application_startup (GApplication *app)
     /* Thread pool (4 workers for thumbnails + metadata) */
     vlx_thread_pool_init (4);
 
-    /* Apply colour scheme */
-    GSettings *settings = g_settings_new ("io.github.velox");
-    AdwStyleManager *sm = adw_style_manager_get_default ();
-    if (g_settings_get_boolean (settings, "dark-mode"))
-        adw_style_manager_set_color_scheme (sm, ADW_COLOR_SCHEME_FORCE_DARK);
-    else
-        adw_style_manager_set_color_scheme (sm, ADW_COLOR_SCHEME_PREFER_LIGHT);
-    g_object_unref (settings);
-
+    /* Apply colour scheme (system default) */
     /* Inhibit manager */
     self->inhibit = vlx_inhibit_manager_new ();
 
@@ -120,8 +111,6 @@ vlx_application_shutdown (GApplication *app)
     if (self->mpris)
         vlx_mpris_provider_stop (self->mpris);
 
-    if (self->plugin_mgr)
-        vlx_plugin_manager_unload_all (self->plugin_mgr);
 
     vlx_inhibit_manager_uninhibit (self->inhibit);
     vlx_thumbnail_cache_shutdown ();
@@ -149,12 +138,7 @@ on_window_created (VlxApplication *self)
                              G_CALLBACK (on_player_state_for_inhibit),
                              self->inhibit, 0);
 
-    /* Plugin manager */
-    if (!self->plugin_mgr) {
-        self->plugin_mgr = vlx_plugin_manager_new (
-            G_OBJECT (player), G_OBJECT (bus));
-        vlx_plugin_manager_load_all (self->plugin_mgr);
-    }
+
 }
 
 /* ── GObject boilerplate ─────────────────────────────────────────────── */
@@ -164,7 +148,7 @@ vlx_application_dispose (GObject *obj)
     VlxApplication *self = VLX_APPLICATION (obj);
     g_clear_object (&self->mpris);
     g_clear_object (&self->inhibit);
-    g_clear_object (&self->plugin_mgr);
+
     G_OBJECT_CLASS (vlx_application_parent_class)->dispose (obj);
 }
 

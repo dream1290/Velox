@@ -78,7 +78,6 @@ gint64 vlx_pipeline_manager_get_subtitle_delay (VlxPipelineManager *self);
 GstElement *vlx_pipeline_manager_get_video_sink (VlxPipelineManager *self);
 
 /* Video balance (brightness: -1.0..1.0) */
-void vlx_pipeline_manager_set_brightness (VlxPipelineManager *self, gdouble val);
 
 /* External subtitle file */
 void vlx_pipeline_manager_load_subtitle_file (VlxPipelineManager *self,

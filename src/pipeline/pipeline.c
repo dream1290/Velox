@@ -21,7 +21,7 @@ struct _VlxPipelineManager {
     GstElement *video_sink;
     GstElement *audio_sink;
 
-    GSettings *settings;
+
 
     GstBus *bus;
     guint bus_watch_id;
@@ -215,11 +215,6 @@ static void build_pipeline(VlxPipelineManager *self, const gchar *uri) {
     g_object_set(self->playbin, "uri", uri, NULL);
     gst_bin_add(GST_BIN(self->pipeline), self->playbin);
 
-    if (!self->settings)
-        self->settings = g_settings_new("io.github.velox");
-
-
-
     self->bus = gst_pipeline_get_bus(GST_PIPELINE(self->pipeline));
     self->bus_watch_id = gst_bus_add_watch(self->bus, bus_message_cb, self);
     gst_object_unref(self->bus);
@@ -248,10 +243,6 @@ static void vlx_pipeline_manager_finalize(GObject *obj) {
             self->bus_watch_id = 0;
         }
         gst_object_unref(self->pipeline);
-    }
-    if (self->settings) {
-        g_object_unref(self->settings);
-        self->settings = NULL;
     }
     g_clear_object(&self->collection);
     if (self->active_stream_ids) {
@@ -401,14 +392,6 @@ GstElement *vlx_pipeline_manager_get_video_sink(VlxPipelineManager *self) {
     g_return_val_if_fail(VLX_IS_PIPELINE_MANAGER(self), NULL);
     return self->video_sink;
 }
-
-void vlx_pipeline_manager_set_brightness(VlxPipelineManager *self, gdouble val) {
-    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
-    if (self->settings) {
-        g_settings_set_double(self->settings, "video-brightness", CLAMP(val, -1.0, 1.0));
-    }
-}
-
 
 
 void vlx_pipeline_manager_load_subtitle_file(VlxPipelineManager *self, const gchar *path) {

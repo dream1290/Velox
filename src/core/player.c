@@ -611,12 +611,6 @@ vlx_player_seek_chapter (VlxPlayer *self, gint delta)
 }
 
 /* ── Video balance (pass-through to pipeline) ────────────────────────────── */
-void vlx_player_set_brightness (VlxPlayer *self, gdouble val)
-{
-    g_return_if_fail (VLX_IS_PLAYER (self));
-    if (self->pipeline)
-        vlx_pipeline_manager_set_brightness (self->pipeline, val);
-}
 
 /* ── External subtitle file ──────────────────────────────────────────────── */
 void vlx_player_load_subtitle_file (VlxPlayer *self, const gchar *path)
