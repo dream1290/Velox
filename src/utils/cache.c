@@ -168,7 +168,6 @@ vlx_cache_remove (VlxCache      *cache,
         return FALSE;
     }
 
-    g_queue_unlink (cache->order, entry->link);
     g_queue_delete_link (cache->order, entry->link);
     g_hash_table_steal (cache->map, key);
     cache_entry_free (cache, entry);

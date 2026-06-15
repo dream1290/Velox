@@ -95,6 +95,8 @@ vlx_thread_pool_push (VlxWorkFunc       work_fn,
         VLX_LOG_ERROR (VLX_LOG_DOMAIN_CORE,
                        "Failed to push task to pool: %s", err->message);
         g_error_free (err);
+        if (td->free_fn && td->task_data)
+            td->free_fn (td->task_data);
         g_slice_free (TaskDesc, td);
     }
 }

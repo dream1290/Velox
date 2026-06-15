@@ -23,6 +23,7 @@ deb-build/
 # Compiled objects
 *.o
 *.obj
+a.out
 *.so
 *.dylib
 *.dll

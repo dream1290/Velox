@@ -12,7 +12,7 @@ G_BEGIN_DECLS
 
 #define VLX_TYPE_VIDEO_WIDGET (vlx_video_widget_get_type ())
 G_DECLARE_FINAL_TYPE (VlxVideoWidget, vlx_video_widget,
-                      VLX, VIDEO_WIDGET, GtkGLArea)
+                      VLX, VIDEO_WIDGET, GtkWidget)
 
 VlxVideoWidget *vlx_video_widget_new (void);
 

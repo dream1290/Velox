@@ -1,5 +1,5 @@
 project('velox', 'c',
-  version : '3.0.0',
+  version : '3.0.2',
   license : 'GPL-3.0-or-later',
   meson_version : '>= 0.62.0',
   default_options : [
@@ -113,12 +113,6 @@ executable('velox',
 
 # ── Data files ──────────────────────────────────────────────────────────────
 subdir('data')
-
-# ── Shaders ──────────────────────────────────────────────────────────────────
-install_data(
-  files('shaders/video.vert', 'shaders/video.frag'),
-  install_dir : join_paths(get_option('datadir'), 'velox', 'shaders'),
-)
 
 
 # ── Tests (stub) ─────────────────────────────────────────────────────────────
