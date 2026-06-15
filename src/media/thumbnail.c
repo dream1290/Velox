@@ -300,13 +300,6 @@ vlx_thumbnail_cache_request (VlxThumbnailCache  *cache,
     g_async_queue_push (worker_queue, req);
 }
 
-GdkTexture *
-vlx_thumbnail_cache_lookup (VlxThumbnailCache *cache,
-                             const gchar       *uri)
-{
-    g_return_val_if_fail (VLX_IS_THUMBNAIL_CACHE (cache), NULL);
-    return vlx_cache_lookup (cache->mem_cache, uri);
-}
 
 void
 vlx_thumbnail_cache_shutdown (void)

@@ -11,7 +11,6 @@
  */
 
 #include "ui/settings_dialog.h"
-#include "platform/settings.h"
 
 struct _VlxSettingsDialog {
     AdwPreferencesDialog parent_instance;

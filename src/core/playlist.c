@@ -11,6 +11,7 @@ struct _VlxPlaylist {
 
     GPtrArray     *uris;         /* gchar* entries, owned */
     GArray        *shuffle_map;  /* guint indices for shuffle order */
+    GHashTable    *reverse_map;  /* Maps un_shuffled_idx -> shuffle_order_idx */
     guint          current;
     gboolean       shuffle;
     VlxRepeatMode  repeat;
@@ -49,14 +50,21 @@ rebuild_play_order (VlxPlaylist *self)
             }
         }
     }
+
+    g_hash_table_remove_all (self->reverse_map);
+    for (guint i = 0; i < self->shuffle_map->len; i++) {
+        g_hash_table_insert (self->reverse_map,
+                             GUINT_TO_POINTER (g_array_index (self->shuffle_map, guint, i)),
+                             GUINT_TO_POINTER (i));
+    }
 }
 
 static gint
 find_order_index (VlxPlaylist *self, guint un_shuffled_idx)
 {
-    for (guint i = 0; i < self->shuffle_map->len; i++) {
-        if (g_array_index (self->shuffle_map, guint, i) == un_shuffled_idx)
-            return i;
+    gpointer val;
+    if (g_hash_table_lookup_extended (self->reverse_map, GUINT_TO_POINTER (un_shuffled_idx), NULL, &val)) {
+        return GPOINTER_TO_UINT (val);
     }
     return -1;
 }
@@ -67,6 +75,7 @@ vlx_playlist_finalize (GObject *obj)
     VlxPlaylist *self = VLX_PLAYLIST (obj);
     g_ptr_array_unref (self->uris);
     g_array_unref (self->shuffle_map);
+    g_hash_table_unref (self->reverse_map);
     G_OBJECT_CLASS (vlx_playlist_parent_class)->finalize (obj);
 }
 
@@ -88,6 +97,7 @@ vlx_playlist_init (VlxPlaylist *self)
 {
     self->uris        = g_ptr_array_new_with_free_func (g_free);
     self->shuffle_map = g_array_new (FALSE, FALSE, sizeof (guint));
+    self->reverse_map = g_hash_table_new (NULL, NULL);
     self->current     = 0;
     self->shuffle     = FALSE;
     self->repeat      = VLX_REPEAT_NONE;
@@ -110,12 +120,26 @@ vlx_playlist_append (VlxPlaylist *self, const gchar *uri)
         /* Insert at a random position *after* the current logical position to ensure it gets played */
         gint logical_pos = find_order_index (self, self->current);
         guint insert_pos = self->shuffle_map->len;
-        if (logical_pos >= 0 && (guint)logical_pos + 1 < self->shuffle_map->len) {
-            insert_pos = (guint)logical_pos + 1 + g_random_int_range (0, self->shuffle_map->len - logical_pos);
+        if (logical_pos >= 0 && (guint)logical_pos < self->shuffle_map->len) {
+            guint range = self->shuffle_map->len - logical_pos;
+            if (range > 0) {
+                insert_pos = (guint)logical_pos + 1 + g_random_int_range (0, range);
+            }
         }
+        insert_pos = MIN (insert_pos, self->shuffle_map->len);
         g_array_insert_val (self->shuffle_map, insert_pos, new_idx);
+        
+        g_hash_table_remove_all (self->reverse_map);
+        for (guint i = 0; i < self->shuffle_map->len; i++) {
+            g_hash_table_insert (self->reverse_map,
+                                 GUINT_TO_POINTER (g_array_index (self->shuffle_map, guint, i)),
+                                 GUINT_TO_POINTER (i));
+        }
     } else {
         g_array_append_val (self->shuffle_map, new_idx);
+        g_hash_table_insert (self->reverse_map,
+                             GUINT_TO_POINTER (new_idx),
+                             GUINT_TO_POINTER (self->shuffle_map->len - 1));
     }
     g_signal_emit (self, playlist_signals[SIGNAL_CHANGED], 0);
 }

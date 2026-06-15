@@ -14,7 +14,7 @@
 #include "core/playlist.h"
 #include "core/event_bus.h"
 #include "media/history.h"
-#include "platform/settings.h"
+#include "platform/mpris.h"
 #include "utils/log.h"
 #include <stdarg.h>
 

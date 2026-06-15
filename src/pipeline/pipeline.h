@@ -61,10 +61,6 @@ void vlx_pipeline_manager_set_muted  (VlxPipelineManager *self,
 void vlx_pipeline_manager_set_rate   (VlxPipelineManager *self,
                                       gdouble rate);
 
-void vlx_pipeline_manager_select_audio    (VlxPipelineManager *self,
-                                           gint index);
-void vlx_pipeline_manager_select_subtitle (VlxPipelineManager *self,
-                                           gint index);
 
 void vlx_pipeline_manager_set_stream      (VlxPipelineManager *self,
                                            const gchar *stream_id);
@@ -81,11 +77,8 @@ gint64 vlx_pipeline_manager_get_subtitle_delay (VlxPipelineManager *self);
  */
 GstElement *vlx_pipeline_manager_get_video_sink (VlxPipelineManager *self);
 
-/* Video balance (brightness/contrast/saturation: -1.0..1.0, hue: -1.0..1.0) */
+/* Video balance (brightness: -1.0..1.0) */
 void vlx_pipeline_manager_set_brightness (VlxPipelineManager *self, gdouble val);
-void vlx_pipeline_manager_set_contrast   (VlxPipelineManager *self, gdouble val);
-void vlx_pipeline_manager_set_saturation (VlxPipelineManager *self, gdouble val);
-void vlx_pipeline_manager_set_hue        (VlxPipelineManager *self, gdouble val);
 
 /* External subtitle file */
 void vlx_pipeline_manager_load_subtitle_file (VlxPipelineManager *self,

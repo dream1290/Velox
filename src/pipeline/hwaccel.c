@@ -38,30 +38,3 @@ vlx_hwaccel_detect (void)
     return VLX_HWACCEL_NONE;
 }
 
-const gchar *
-vlx_hwaccel_type_to_string (VlxHwAccelType type)
-{
-    switch (type) {
-    case VLX_HWACCEL_VAAPI: return "VAAPI";
-    case VLX_HWACCEL_NVDEC: return "NVDEC";
-    case VLX_HWACCEL_V4L2:  return "V4L2";
-    case VLX_HWACCEL_NONE:  return "Software";
-    default:                return "Unknown";
-    }
-}
-
-GstElement *
-vlx_hwaccel_create_decoder (VlxHwAccelType type)
-{
-    switch (type) {
-    case VLX_HWACCEL_VAAPI:
-        return gst_element_factory_make ("vaapidecodebin", "hwdec");
-    case VLX_HWACCEL_NVDEC:
-        return gst_element_factory_make ("nvh264dec", "hwdec");
-    case VLX_HWACCEL_V4L2:
-        return gst_element_factory_make ("v4l2h264dec", "hwdec");
-    case VLX_HWACCEL_NONE:
-    default:
-        return NULL;
-    }
-}

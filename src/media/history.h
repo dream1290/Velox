@@ -53,9 +53,6 @@ GPtrArray        *vlx_history_list               (VlxHistory  *self,
 
 void              vlx_history_entry_free         (VlxHistoryEntry *entry);
 
-/* Remove a single entry or clear all history. */
-void              vlx_history_remove             (VlxHistory  *self,
-                                                  const gchar *uri);
 void              vlx_history_clear_all          (VlxHistory  *self);
 
 G_END_DECLS

@@ -29,7 +29,6 @@ struct _VlxApplication {
     VlxInhibitManager *inhibit;
     VlxPluginManager *plugin_mgr;
 
-    VlxSettings      *settings;
 };
 
 G_DEFINE_TYPE (VlxApplication, vlx_application, ADW_TYPE_APPLICATION)
@@ -79,15 +78,14 @@ vlx_application_startup (GApplication *app)
     /* Thread pool (4 workers for thumbnails + metadata) */
     vlx_thread_pool_init (4);
 
-    /* Settings */
-    self->settings = vlx_settings_get_default ();
-
     /* Apply colour scheme */
+    GSettings *settings = g_settings_new ("io.github.velox");
     AdwStyleManager *sm = adw_style_manager_get_default ();
-    if (vlx_settings_get_dark_mode (self->settings))
+    if (g_settings_get_boolean (settings, "dark-mode"))
         adw_style_manager_set_color_scheme (sm, ADW_COLOR_SCHEME_FORCE_DARK);
     else
         adw_style_manager_set_color_scheme (sm, ADW_COLOR_SCHEME_PREFER_LIGHT);
+    g_object_unref (settings);
 
     /* Inhibit manager */
     self->inhibit = vlx_inhibit_manager_new ();

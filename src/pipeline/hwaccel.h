@@ -18,7 +18,5 @@ typedef enum {
 } VlxHwAccelType;
 
 VlxHwAccelType vlx_hwaccel_detect       (void);
-const gchar   *vlx_hwaccel_type_to_string (VlxHwAccelType type);
-GstElement    *vlx_hwaccel_create_decoder (VlxHwAccelType type);
 
 G_END_DECLS

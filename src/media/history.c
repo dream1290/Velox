@@ -233,25 +233,10 @@ vlx_history_entry_free (VlxHistoryEntry *entry)
 }
 
 void
-vlx_history_remove (VlxHistory *self, const gchar *uri)
-{
-    g_return_if_fail (VLX_IS_HISTORY (self));
-    if (!self->db || !uri) return;
-
-    sqlite3_stmt *stmt;
-    if (sqlite3_prepare_v2 (self->db,
-                             "DELETE FROM history WHERE uri = ?1;",
-                             -1, &stmt, NULL) != SQLITE_OK) return;
-
-    sqlite3_bind_text (stmt, 1, uri, -1, SQLITE_STATIC);
-    sqlite3_step (stmt);
-    sqlite3_finalize (stmt);
-}
-
-void
 vlx_history_clear_all (VlxHistory *self)
 {
     g_return_if_fail (VLX_IS_HISTORY (self));
     if (!self->db) return;
     exec_simple (self, "DELETE FROM history;");
 }
+

@@ -30,10 +30,8 @@
 #include "core/plugin.h"
 
 /* ── Pipeline (L3) ─────────────────────────────────────────────────────────── */
-#include "pipeline/clock.h"
 #include "pipeline/hwaccel.h"
 #include "pipeline/pipeline.h"
-#include "pipeline/subtitle_engine.h"
 
 /* ── UI (L1) ───────────────────────────────────────────────────────────────── */
 #include "ui/controls_overlay.h"
@@ -45,14 +43,13 @@
 #include "ui/window.h"
 
 /* ── Media (L4) ────────────────────────────────────────────────────────────── */
-#include "media/discovery.h"
+
 #include "media/metadata.h"
 #include "media/thumbnail.h"
 
 /* ── Platform (L5) ─────────────────────────────────────────────────────────── */
 #include "platform/inhibit.h"
 #include "platform/mpris.h"
-#include "platform/settings.h"
 
 /* ── Utilities ─────────────────────────────────────────────────────────────── */
 #include "utils/cache.h"

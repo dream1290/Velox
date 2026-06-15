@@ -5,6 +5,7 @@
 
 #include "core/event_bus.h"
 #include "utils/log.h"
+#include <gst/gst.h>
 
 /* ── GEnum registration for VlxPlayerState ─────────────────────────────────── */
 GType

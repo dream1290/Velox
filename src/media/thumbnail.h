@@ -27,8 +27,6 @@ void vlx_thumbnail_cache_request (VlxThumbnailCache  *cache,
                                   VlxThumbnailReadyCb callback,
                                   gpointer            user_data);
 
-GdkTexture *vlx_thumbnail_cache_lookup (VlxThumbnailCache *cache,
-                                        const gchar       *uri);
 
 void vlx_thumbnail_cache_shutdown (void);
 

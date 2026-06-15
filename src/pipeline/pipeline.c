@@ -22,9 +22,6 @@ struct _VlxPipelineManager {
     GstElement *audio_sink;
 
     GSettings *settings;
-    gulong eq_sig_id;
-    gulong vid_sig_id;
-    gulong deint_sig_id;
 
     GstBus *bus;
     guint bus_watch_id;
@@ -166,11 +163,7 @@ static gboolean bus_message_cb(GstBus *bus, GstMessage *msg, gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
-static void on_video_balance_changed(GSettings *settings, const gchar *key, gpointer data) {
-    // VlxPipelineManager *self = VLX_PIPELINE_MANAGER(data);
-    // if (!self->pipeline) return;
-    // ... disable video-filter due to playbin3 bugs
-}
+
 
 static void build_pipeline(VlxPipelineManager *self, const gchar *uri) {
     g_mutex_lock(&self->seek_mutex);
@@ -181,20 +174,7 @@ static void build_pipeline(VlxPipelineManager *self, const gchar *uri) {
     g_mutex_unlock(&self->seek_mutex);
 
     if (self->pipeline) {
-        if (self->settings) {
-            if (self->eq_sig_id) {
-                g_signal_handler_disconnect(self->settings, self->eq_sig_id);
-                self->eq_sig_id = 0;
-            }
-            if (self->vid_sig_id) {
-                g_signal_handler_disconnect(self->settings, self->vid_sig_id);
-                self->vid_sig_id = 0;
-            }
-            if (self->deint_sig_id) {
-                g_signal_handler_disconnect(self->settings, self->deint_sig_id);
-                self->deint_sig_id = 0;
-            }
-        }
+
         gst_element_set_state(self->pipeline, GST_STATE_NULL);
         if (self->bus_watch_id) {
             g_source_remove(self->bus_watch_id);
@@ -238,8 +218,7 @@ static void build_pipeline(VlxPipelineManager *self, const gchar *uri) {
     if (!self->settings)
         self->settings = g_settings_new("io.github.velox");
 
-    on_video_balance_changed(self->settings, NULL, self);
-    self->vid_sig_id = g_signal_connect(self->settings, "changed", G_CALLBACK(on_video_balance_changed), self);
+
 
     self->bus = gst_pipeline_get_bus(GST_PIPELINE(self->pipeline));
     self->bus_watch_id = gst_bus_add_watch(self->bus, bus_message_cb, self);
@@ -262,20 +241,7 @@ static void vlx_pipeline_manager_finalize(GObject *obj) {
     g_cond_clear(&self->seek_cond);
 
     if (self->pipeline) {
-        if (self->settings) {
-            if (self->eq_sig_id) {
-                g_signal_handler_disconnect(self->settings, self->eq_sig_id);
-                self->eq_sig_id = 0;
-            }
-            if (self->vid_sig_id) {
-                g_signal_handler_disconnect(self->settings, self->vid_sig_id);
-                self->vid_sig_id = 0;
-            }
-            if (self->deint_sig_id) {
-                g_signal_handler_disconnect(self->settings, self->deint_sig_id);
-                self->deint_sig_id = 0;
-            }
-        }
+
         gst_element_set_state(self->pipeline, GST_STATE_NULL);
         if (self->bus_watch_id) {
             g_source_remove(self->bus_watch_id);
@@ -392,17 +358,7 @@ void vlx_pipeline_manager_set_rate(VlxPipelineManager *self, gdouble rate) {
     }
 }
 
-void vlx_pipeline_manager_select_audio(VlxPipelineManager *self, gint index) {
-    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
-    if (self->playbin)
-        g_object_set(self->playbin, "current-audio", index, NULL);
-}
 
-void vlx_pipeline_manager_select_subtitle(VlxPipelineManager *self, gint index) {
-    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
-    if (self->playbin)
-        g_object_set(self->playbin, "current-text", index, NULL);
-}
 
 void vlx_pipeline_manager_set_stream(VlxPipelineManager *self, const gchar *stream_id) {
     g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
@@ -453,26 +409,7 @@ void vlx_pipeline_manager_set_brightness(VlxPipelineManager *self, gdouble val) 
     }
 }
 
-void vlx_pipeline_manager_set_contrast(VlxPipelineManager *self, gdouble val) {
-    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
-    if (self->settings) {
-        g_settings_set_double(self->settings, "video-contrast", CLAMP(val, 0.0, 2.0));
-    }
-}
 
-void vlx_pipeline_manager_set_saturation(VlxPipelineManager *self, gdouble val) {
-    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
-    if (self->settings) {
-        g_settings_set_double(self->settings, "video-saturation", CLAMP(val, 0.0, 2.0));
-    }
-}
-
-void vlx_pipeline_manager_set_hue(VlxPipelineManager *self, gdouble val) {
-    g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));
-    if (self->settings) {
-        g_settings_set_double(self->settings, "video-hue", CLAMP(val, -1.0, 1.0));
-    }
-}
 
 void vlx_pipeline_manager_load_subtitle_file(VlxPipelineManager *self, const gchar *path) {
     g_return_if_fail(VLX_IS_PIPELINE_MANAGER(self));

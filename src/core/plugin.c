@@ -207,7 +207,7 @@ vlx_plugin_manager_load_all (VlxPluginManager *self)
     g_free (user_dir);
 
     /* 2. System plugins (based on install prefix) */
-    gchar *sys_dir = g_build_filename (VELOX_DATADIR ? VELOX_DATADIR : "/usr/share",
+    gchar *sys_dir = g_build_filename (VELOX_DATADIR,
                                         "velox", "plugins", NULL);
     scan_dir (self, sys_dir);
     g_free (sys_dir);

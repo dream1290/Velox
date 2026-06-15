@@ -70,8 +70,6 @@ velox_sources = files(
   # Pipeline (L3 — Media Engine)
   'src/pipeline/pipeline.c',
   'src/pipeline/hwaccel.c',
-  'src/pipeline/clock.c',
-  'src/pipeline/subtitle_engine.c',
 
   # UI (L1 — Presentation)
   'src/ui/window.c',
@@ -86,13 +84,11 @@ velox_sources = files(
   # Media (L4 — Media Services)
   'src/media/thumbnail.c',
   'src/media/metadata.c',
-  'src/media/discovery.c',
   'src/media/history.c',
 
   # Platform (L5 — OS Integration)
   'src/platform/mpris.c',
   'src/platform/inhibit.c',
-  'src/platform/settings.c',
 
   # Utilities
   'src/utils/thread_pool.c',

@@ -187,10 +187,8 @@ handle_method_player (GDBusConnection       *conn,
     else if (g_strcmp0 (method, "Pause")     == 0) vlx_player_pause  (self->player);
     else if (g_strcmp0 (method, "PlayPause") == 0) vlx_player_toggle (self->player);
     else if (g_strcmp0 (method, "Stop")      == 0) vlx_player_stop   (self->player);
-    else if (g_strcmp0 (method, "Next")      == 0)
-        vlx_player_seek_relative (self->player, +30 * G_USEC_PER_SEC);
-    else if (g_strcmp0 (method, "Previous")  == 0)
-        vlx_player_seek_relative (self->player, -30 * G_USEC_PER_SEC);
+    else if (g_strcmp0 (method, "Next")      == 0) { /* Playlist unsupported */ }
+    else if (g_strcmp0 (method, "Previous")  == 0) { /* Playlist unsupported */ }
     else if (g_strcmp0 (method, "Seek")      == 0) {
         gint64 offset;
         g_variant_get (params, "(x)", &offset);
@@ -229,8 +227,8 @@ handle_get_player (GDBusConnection *conn,
         return g_variant_new_int64 (self->position_us);
     if (g_strcmp0 (prop, "MinimumRate")   == 0) return g_variant_new_double (0.25);
     if (g_strcmp0 (prop, "MaximumRate")   == 0) return g_variant_new_double (4.0);
-    if (g_strcmp0 (prop, "CanGoNext")     == 0) return g_variant_new_boolean (TRUE);
-    if (g_strcmp0 (prop, "CanGoPrevious") == 0) return g_variant_new_boolean (TRUE);
+    if (g_strcmp0 (prop, "CanGoNext")     == 0) return g_variant_new_boolean (FALSE);
+    if (g_strcmp0 (prop, "CanGoPrevious") == 0) return g_variant_new_boolean (FALSE);
     if (g_strcmp0 (prop, "CanPlay")       == 0) return g_variant_new_boolean (TRUE);
     if (g_strcmp0 (prop, "CanPause")      == 0) return g_variant_new_boolean (TRUE);
     if (g_strcmp0 (prop, "CanSeek")       == 0) return g_variant_new_boolean (TRUE);
@@ -257,7 +255,7 @@ on_bus_acquired (GDBusConnection *conn,
     VlxMprisProvider *self = VLX_MPRIS_PROVIDER (data);
     (void) name;
 
-    self->connection = g_object_ref (conn);
+    g_set_object (&self->connection, conn);
 
     GDBusNodeInfo *node = g_dbus_node_info_new_for_xml (MPRIS_XML, NULL);
 
@@ -364,10 +362,11 @@ static void
 vlx_mpris_provider_finalize (GObject *obj)
 {
     VlxMprisProvider *self = VLX_MPRIS_PROVIDER (obj);
+    vlx_mpris_provider_stop (self);
+    g_signal_handlers_disconnect_by_data (self->bus, self);
     g_free (self->title);
     g_free (self->uri);
     g_clear_object (&self->player);
-    g_clear_object (&self->connection);
     G_OBJECT_CLASS (vlx_mpris_provider_parent_class)->finalize (obj);
 }
 
@@ -408,6 +407,7 @@ void
 vlx_mpris_provider_start (VlxMprisProvider *self)
 {
     g_return_if_fail (VLX_IS_MPRIS_PROVIDER (self));
+    if (self->bus_name_id != 0) return;
 
     self->bus_name_id = g_bus_own_name (
         G_BUS_TYPE_SESSION,
@@ -432,5 +432,8 @@ vlx_mpris_provider_stop (VlxMprisProvider *self)
                                              self->root_reg_id);
         g_dbus_connection_unregister_object (self->connection,
                                              self->player_reg_id);
+        self->root_reg_id = 0;
+        self->player_reg_id = 0;
     }
+    g_clear_object (&self->connection);
 }

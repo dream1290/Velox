@@ -49,17 +49,26 @@ meta_worker (gpointer data)
     VlxMediaInfo *info = g_slice_new0 (VlxMediaInfo);
     req->result = info;
 
-    GError        *err  = NULL;
-    GstDiscoverer *disc = gst_discoverer_new (10 * GST_SECOND, &err);
+    static GstDiscoverer *disc = NULL;
+    static gsize init = 0;
+    if (g_once_init_enter (&init)) {
+        GError *init_err = NULL;
+        GstDiscoverer *new_disc = gst_discoverer_new (10 * GST_SECOND, &init_err);
+        if (!new_disc) {
+            VLX_LOG_ERROR (VLX_LOG_DOMAIN_MEDIA,
+                           "GstDiscoverer init failed: %s", init_err->message);
+            g_error_free (init_err);
+        }
+        g_once_init_leave (&init, 1);
+        disc = new_disc;
+    }
+
     if (!disc) {
-        VLX_LOG_ERROR (VLX_LOG_DOMAIN_MEDIA,
-                       "GstDiscoverer init failed: %s", err->message);
-        g_error_free (err);
         return NULL;
     }
 
+    GError *err = NULL;
     GstDiscovererInfo *dinfo = gst_discoverer_discover_uri (disc, req->uri, &err);
-    gst_object_unref (disc);
 
     if (!dinfo) {
         if (err) {

@@ -15,7 +15,7 @@
 #pragma once
 
 #include <glib-object.h>
-#include <gst/gst.h>
+typedef struct _GstStreamCollection GstStreamCollection;
 
 G_BEGIN_DECLS
 

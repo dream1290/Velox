@@ -35,7 +35,6 @@ struct _VlxPlayer {
     GArray         *chapters_us;   /* gint64 timestamps in µs */
 
     guint           tick_source_id;
-    gint64          last_seek_req_time;
 };
 
 G_DEFINE_TYPE (VlxPlayer, vlx_player, G_TYPE_OBJECT)
@@ -53,7 +52,7 @@ enum {
 
 static GParamSpec *props[N_PROPS];
 
-/* ── Position tick (16ms ≈ 60 Hz) ──────────────────────────────────────────── */
+/* ── Position tick (33ms ≈ 30 Hz) ──────────────────────────────────────────── */
 static gboolean
 position_tick_cb (gpointer data)
 {
@@ -64,11 +63,6 @@ position_tick_cb (gpointer data)
 
     gint64 pos = vlx_pipeline_manager_get_position (self->pipeline);
     if (pos < 0) return G_SOURCE_CONTINUE;
-
-    gint64 dur = vlx_pipeline_manager_get_duration (self->pipeline);
-
-    if (dur > 0)
-        self->duration_us = dur;
 
     vlx_event_bus_emit_position_updated (self->bus, pos, self->duration_us);
 
@@ -84,7 +78,7 @@ static void
 start_tick (VlxPlayer *self)
 {
     if (self->tick_source_id == 0)
-        self->tick_source_id = g_timeout_add (16, position_tick_cb, self);
+        self->tick_source_id = g_timeout_add (33, position_tick_cb, self);
 }
 
 static void
@@ -120,10 +114,15 @@ on_pipeline_state_changed (VlxPipelineManager *pm,
     (void) old_state;
 
     switch (new_state) {
-    case GST_STATE_PLAYING:
+    case GST_STATE_PLAYING: {
+        /* Refresh cached duration on state transitions */
+        gint64 dur = vlx_pipeline_manager_get_duration (self->pipeline);
+        if (dur > 0)
+            self->duration_us = dur;
         set_state (self, VLX_STATE_PLAYING);
         start_tick (self);
         break;
+    }
     case GST_STATE_PAUSED:
         set_state (self, VLX_STATE_PAUSED);
         break;
@@ -173,9 +172,6 @@ on_pipeline_buffering (VlxPipelineManager *pm,
     (void) pm;
 
     vlx_event_bus_emit_buffering (self->bus, percent);
-
-    // Don't pause playback during buffering for local files
-    // Let GStreamer handle it automatically
 }
 
 static void
@@ -486,13 +482,6 @@ const gchar *vlx_player_get_uri (VlxPlayer *self)
     return self->current_uri;
 }
 
-void vlx_player_set_subtitle_track (VlxPlayer *self, gint idx)
-{
-    g_return_if_fail (VLX_IS_PLAYER (self));
-    if (self->pipeline)
-        vlx_pipeline_manager_select_subtitle (self->pipeline, idx);
-}
-
 void vlx_player_set_subtitle_delay (VlxPlayer *self, gint64 delay_us)
 {
     g_return_if_fail (VLX_IS_PLAYER (self));
@@ -506,13 +495,6 @@ gint64 vlx_player_get_subtitle_delay (VlxPlayer *self)
     if (self->pipeline)
         return vlx_pipeline_manager_get_subtitle_delay (self->pipeline);
     return 0;
-}
-
-void vlx_player_set_audio_track (VlxPlayer *self, gint idx)
-{
-    g_return_if_fail (VLX_IS_PLAYER (self));
-    if (self->pipeline)
-        vlx_pipeline_manager_select_audio (self->pipeline, idx);
 }
 
 void
@@ -634,27 +616,6 @@ void vlx_player_set_brightness (VlxPlayer *self, gdouble val)
     g_return_if_fail (VLX_IS_PLAYER (self));
     if (self->pipeline)
         vlx_pipeline_manager_set_brightness (self->pipeline, val);
-}
-
-void vlx_player_set_contrast (VlxPlayer *self, gdouble val)
-{
-    g_return_if_fail (VLX_IS_PLAYER (self));
-    if (self->pipeline)
-        vlx_pipeline_manager_set_contrast (self->pipeline, val);
-}
-
-void vlx_player_set_saturation (VlxPlayer *self, gdouble val)
-{
-    g_return_if_fail (VLX_IS_PLAYER (self));
-    if (self->pipeline)
-        vlx_pipeline_manager_set_saturation (self->pipeline, val);
-}
-
-void vlx_player_set_hue (VlxPlayer *self, gdouble val)
-{
-    g_return_if_fail (VLX_IS_PLAYER (self));
-    if (self->pipeline)
-        vlx_pipeline_manager_set_hue (self->pipeline, val);
 }
 
 /* ── External subtitle file ──────────────────────────────────────────────── */

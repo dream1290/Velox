@@ -36,11 +36,8 @@ const gchar   *vlx_player_get_uri       (VlxPlayer *self);
 
 void           vlx_player_select_stream      (VlxPlayer *self, const gchar *stream_id);
 
-void           vlx_player_set_subtitle_track (VlxPlayer *self, gint idx);
 void           vlx_player_set_subtitle_delay (VlxPlayer *self, gint64 delay_us);
 gint64         vlx_player_get_subtitle_delay (VlxPlayer *self);
-
-void           vlx_player_set_audio_track    (VlxPlayer *self, gint idx);
 void           vlx_player_set_rate           (VlxPlayer *self, gdouble rate);
 gdouble        vlx_player_get_rate           (VlxPlayer *self);
 
@@ -61,9 +58,6 @@ void           vlx_player_seek_chapter       (VlxPlayer *self, gint delta);
 
 /* Video balance */
 void           vlx_player_set_brightness     (VlxPlayer *self, gdouble val);
-void           vlx_player_set_contrast       (VlxPlayer *self, gdouble val);
-void           vlx_player_set_saturation     (VlxPlayer *self, gdouble val);
-void           vlx_player_set_hue            (VlxPlayer *self, gdouble val);
 
 /* External subtitle file */
 void           vlx_player_load_subtitle_file (VlxPlayer *self,
