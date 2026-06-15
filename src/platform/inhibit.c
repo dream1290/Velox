@@ -76,7 +76,7 @@ vlx_inhibit_manager_uninhibit (VlxInhibitManager *self)
     GDBusConnection *conn = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, &err);
     if (!conn) goto out;
 
-    g_dbus_connection_call_sync (
+    GVariant *res = g_dbus_connection_call_sync (
         conn,
         PM_BUS, PM_PATH, PM_IFACE,
         "UnInhibit",
@@ -84,6 +84,8 @@ vlx_inhibit_manager_uninhibit (VlxInhibitManager *self)
         NULL,
         G_DBUS_CALL_FLAGS_NONE,
         3000, NULL, &err);
+    if (res)
+        g_variant_unref (res);
 
     VLX_LOG_INFO (VLX_LOG_DOMAIN_PLATFORM,
                   "Sleep uninhibited (cookie=%u)", self->cookie);

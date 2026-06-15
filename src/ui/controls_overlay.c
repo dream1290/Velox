@@ -50,7 +50,6 @@ struct _VlxControlsOverlay {
     gboolean    ripple_active;
     gboolean    ripple_forward;   /* TRUE = +10s, FALSE = -10s */
     gdouble     ripple_progress;  /* 0.0 → 1.0 */
-    guint       ripple_timer_id;  /* unused slot, kept for ABI compat */
     guint       ripple_tick_id;   /* gtk_widget_add_tick_callback handle */
     gint64      ripple_start_us;  /* GdkFrameClock timestamp at start */
 };

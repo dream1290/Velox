@@ -255,7 +255,7 @@ on_bus_acquired (GDBusConnection *conn,
     VlxMprisProvider *self = VLX_MPRIS_PROVIDER (data);
     (void) name;
 
-    g_set_object (&self->connection, conn);
+    self->connection = g_object_ref (conn);
 
     GDBusNodeInfo *node = g_dbus_node_info_new_for_xml (MPRIS_XML, NULL);
 
@@ -362,11 +362,10 @@ static void
 vlx_mpris_provider_finalize (GObject *obj)
 {
     VlxMprisProvider *self = VLX_MPRIS_PROVIDER (obj);
-    vlx_mpris_provider_stop (self);
-    g_signal_handlers_disconnect_by_data (self->bus, self);
     g_free (self->title);
     g_free (self->uri);
     g_clear_object (&self->player);
+    g_clear_object (&self->connection);
     G_OBJECT_CLASS (vlx_mpris_provider_parent_class)->finalize (obj);
 }
 
@@ -392,14 +391,14 @@ vlx_mpris_provider_new (VlxPlayer *player)
     self->player = g_object_ref (player);
     self->bus    = vlx_event_bus_get_default ();
 
-    g_signal_connect (self->bus, "state-changed",
-                      G_CALLBACK (on_state_changed), self);
-    g_signal_connect (self->bus, "position-updated",
-                      G_CALLBACK (on_position_updated), self);
-    g_signal_connect (self->bus, "volume-changed",
-                      G_CALLBACK (on_volume_changed), self);
-    g_signal_connect (self->bus, "media-info",
-                      G_CALLBACK (on_media_info), self);
+    g_signal_connect_object (self->bus, "state-changed",
+                             G_CALLBACK (on_state_changed), self, 0);
+    g_signal_connect_object (self->bus, "position-updated",
+                             G_CALLBACK (on_position_updated), self, 0);
+    g_signal_connect_object (self->bus, "volume-changed",
+                             G_CALLBACK (on_volume_changed), self, 0);
+    g_signal_connect_object (self->bus, "media-info",
+                             G_CALLBACK (on_media_info), self, 0);
     return self;
 }
 
@@ -407,7 +406,6 @@ void
 vlx_mpris_provider_start (VlxMprisProvider *self)
 {
     g_return_if_fail (VLX_IS_MPRIS_PROVIDER (self));
-    if (self->bus_name_id != 0) return;
 
     self->bus_name_id = g_bus_own_name (
         G_BUS_TYPE_SESSION,

@@ -77,8 +77,6 @@ velox_sources = files(
   'src/ui/controls_overlay.c',
   'src/ui/seek_bar.c',
   'src/ui/playlist_panel.c',
-  'src/ui/settings_dialog.c',
-  'src/ui/subtitle_overlay.c',
   'src/ui/pip_window.c',
 
   # Media (L4 — Media Services)

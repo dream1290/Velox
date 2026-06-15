@@ -37,8 +37,6 @@
 #include "ui/controls_overlay.h"
 #include "ui/playlist_panel.h"
 #include "ui/seek_bar.h"
-#include "ui/settings_dialog.h"
-#include "ui/subtitle_overlay.h"
 #include "ui/video_widget.h"
 #include "ui/window.h"
 

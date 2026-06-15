@@ -7,8 +7,6 @@
 #include "ui/video_widget.h"
 #include "ui/controls_overlay.h"
 #include "ui/playlist_panel.h"
-#include "ui/settings_dialog.h"
-#include "ui/subtitle_overlay.h"
 #include "ui/pip_window.h"
 #include "core/player.h"
 #include "core/playlist.h"
@@ -29,7 +27,7 @@ struct _VlxWindow {
     GtkWidget            *overlay;
     VlxVideoWidget       *video_widget;
     VlxControlsOverlay   *controls;
-    VlxSubtitleOverlay   *subtitle_overlay;
+    VlxPipWindow         *pip_window;
     VlxPlaylistPanel     *playlist_panel;
 
     GtkWidget            *open_btn;
@@ -47,7 +45,6 @@ struct _VlxWindow {
     GstStreamCollection  *collection;
 
     /* P3 — Power user */
-    VlxPipWindow         *pip_window;
     VlxHistory           *history;
 
     /* P4 — Video balance (live, clamped) */
@@ -171,15 +168,6 @@ act_media_info (GSimpleAction *action, GVariant *param, gpointer data)
 { (void) action; (void) param; vlx_window_show_media_info (VLX_WINDOW (data)); }
 
 static void
-act_preferences (GSimpleAction *action, GVariant *param, gpointer data)
-{
-    (void) action; (void) param;
-    VlxWindow *self = VLX_WINDOW (data);
-    VlxSettingsDialog *dlg = vlx_settings_dialog_new ();
-    adw_dialog_present (ADW_DIALOG (dlg), GTK_WIDGET (self));
-}
-
-static void
 act_toggle_queue (GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void) action; (void) param;
@@ -247,7 +235,7 @@ vlx_window_setup_actions_and_menu (VlxWindow *self)
         { .name = "screenshot",      .activate = act_screenshot,     .parameter_type = NULL, .state = NULL, .change_state = NULL },
         { .name = "pip",             .activate = act_pip,            .parameter_type = NULL, .state = NULL, .change_state = NULL },
         { .name = "media-info",      .activate = act_media_info,     .parameter_type = NULL, .state = NULL, .change_state = NULL },
-        { .name = "preferences",     .activate = act_preferences,    .parameter_type = NULL, .state = NULL, .change_state = NULL },
+
         { .name = "toggle-queue",    .activate = act_toggle_queue,   .parameter_type = NULL, .state = NULL, .change_state = NULL },
         { .name = "shortcuts",       .activate = act_shortcuts,      .parameter_type = NULL, .state = NULL, .change_state = NULL },
         { .name = "clear-history",   .activate = act_clear_history,  .parameter_type = NULL, .state = NULL, .change_state = NULL },
@@ -325,10 +313,6 @@ vlx_window_setup_actions_and_menu (VlxWindow *self)
     g_menu_item_set_attribute (item_clear_history, "icon", "s", "edit-clear-history-symbolic");
     g_menu_append_item (tools, item_clear_history);
     g_object_unref (item_clear_history);
-    GMenuItem *item_preferences = g_menu_item_new ("Preferences…", "win.preferences");
-    g_menu_item_set_attribute (item_preferences, "icon", "s", "preferences-system-symbolic");
-    g_menu_append_item (tools, item_preferences);
-    g_object_unref (item_preferences);
     g_menu_append_section (menu, "Tools", G_MENU_MODEL (tools));
     g_object_unref (tools);
 
@@ -1145,15 +1129,13 @@ vlx_window_init (VlxWindow *self)
     /* ── Child widgets ────────────────────────────────────────────── */
     self->video_widget     = vlx_video_widget_new ();
     self->controls         = vlx_controls_overlay_new (self->player);
-    self->subtitle_overlay = vlx_subtitle_overlay_new ();
+
     self->playlist_panel   = vlx_playlist_panel_new (self->playlist);
 
     /* ── Overlay stack: video → subtitle → spinner → controls → HUD ─────────── */
     self->overlay = gtk_overlay_new ();
     gtk_overlay_set_child (GTK_OVERLAY (self->overlay),
                            GTK_WIDGET (self->video_widget));
-    gtk_overlay_add_overlay (GTK_OVERLAY (self->overlay),
-                             GTK_WIDGET (self->subtitle_overlay));
 
     self->spinner = gtk_spinner_new ();
     gtk_spinner_start (GTK_SPINNER (self->spinner));
