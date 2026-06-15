@@ -167,30 +167,9 @@ static gboolean bus_message_cb(GstBus *bus, GstMessage *msg, gpointer data) {
 }
 
 static void on_video_balance_changed(GSettings *settings, const gchar *key, gpointer data) {
-    VlxPipelineManager *self = VLX_PIPELINE_MANAGER(data);
-    if (!self->pipeline) return;
-
-    gchar *filter_desc = NULL;
-    if (key == NULL || g_strcmp0(key, "video-brightness") == 0 ||
-        g_strcmp0(key, "video-contrast") == 0 ||
-        g_strcmp0(key, "video-saturation") == 0 ||
-        g_strcmp0(key, "video-hue") == 0) {
-        gdouble brightness = g_settings_get_double(settings, "video-brightness");
-        gdouble contrast = g_settings_get_double(settings, "video-contrast");
-        gdouble saturation = g_settings_get_double(settings, "video-saturation");
-        gdouble hue = g_settings_get_double(settings, "video-hue");
-        filter_desc = g_strdup_printf("videobalance brightness=%f contrast=%f saturation=%f hue=%f",
-                                      brightness, contrast, saturation, hue);
-    }
-
-    if (filter_desc) {
-        GstElement *filter = gst_parse_bin_from_description(filter_desc, TRUE, NULL);
-        if (filter) {
-            g_object_set(self->playbin, "video-filter", filter, NULL);
-            gst_object_unref(filter);
-        }
-        g_free(filter_desc);
-    }
+    // VlxPipelineManager *self = VLX_PIPELINE_MANAGER(data);
+    // if (!self->pipeline) return;
+    // ... disable video-filter due to playbin3 bugs
 }
 
 static void build_pipeline(VlxPipelineManager *self, const gchar *uri) {
@@ -239,7 +218,7 @@ static void build_pipeline(VlxPipelineManager *self, const gchar *uri) {
     self->video_sink = gst_element_factory_make("appsink", "vsink");
 
     if (self->video_sink) {
-        GstCaps *caps = gst_caps_from_string("video/x-raw(memory:GLMemory), format=RGBA; video/x-raw, format=RGBA");
+        GstCaps *caps = gst_caps_from_string("video/x-raw, format=RGBA, pixel-aspect-ratio=1/1");
         g_object_set(self->video_sink, "caps", caps, "max-buffers", 2, "drop", TRUE, "sync", TRUE, NULL);
         gst_caps_unref(caps);
         g_object_set(self->playbin, "video-sink", self->video_sink, NULL);

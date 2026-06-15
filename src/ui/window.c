@@ -263,11 +263,11 @@ vlx_window_setup_actions_and_menu (VlxWindow *self)
     /* — Media section — */
     GMenu *media = g_menu_new ();
     GMenuItem *item_open_file = g_menu_item_new ("Open File…", "win.open-file");
-    g_menu_item_set_icon (item_open_file, g_themed_icon_new ("document-open-symbolic"));
+    g_menu_item_set_attribute (item_open_file, "icon", "s", "document-open-symbolic");
     g_menu_append_item (media, item_open_file);
     g_object_unref (item_open_file);
     GMenuItem *item_open_url = g_menu_item_new ("Open Network Stream…", "win.open-url");
-    g_menu_item_set_icon (item_open_url, g_themed_icon_new ("insert-link-symbolic"));
+    g_menu_item_set_attribute (item_open_url, "icon", "s", "insert-link-symbolic");
     g_menu_append_item (media, item_open_url);
     g_object_unref (item_open_url);
     g_menu_append_section (menu, NULL, G_MENU_MODEL (media));
@@ -276,19 +276,19 @@ vlx_window_setup_actions_and_menu (VlxWindow *self)
     /* — Playback section — */
     GMenu *playback = g_menu_new ();
     GMenuItem *item_play_pause = g_menu_item_new ("Play / Pause", "win.play-pause");
-    g_menu_item_set_icon (item_play_pause, g_themed_icon_new ("media-playback-start-symbolic"));
+    g_menu_item_set_attribute (item_play_pause, "icon", "s", "media-playback-start-symbolic");
     g_menu_append_item (playback, item_play_pause);
     g_object_unref (item_play_pause);
     GMenuItem *item_stop = g_menu_item_new ("Stop", "win.stop");
-    g_menu_item_set_icon (item_stop, g_themed_icon_new ("media-playback-stop-symbolic"));
+    g_menu_item_set_attribute (item_stop, "icon", "s", "media-playback-stop-symbolic");
     g_menu_append_item (playback, item_stop);
     g_object_unref (item_stop);
     GMenuItem *item_ab_loop = g_menu_item_new ("A-B Loop", "win.ab-loop");
-    g_menu_item_set_icon (item_ab_loop, g_themed_icon_new ("media-playlist-repeat-symbolic"));
+    g_menu_item_set_attribute (item_ab_loop, "icon", "s", "media-playlist-repeat-symbolic");
     g_menu_append_item (playback, item_ab_loop);
     g_object_unref (item_ab_loop);
     GMenuItem *item_speed_reset = g_menu_item_new ("Reset Speed", "win.speed-reset");
-    g_menu_item_set_icon (item_speed_reset, g_themed_icon_new ("media-skip-forward-symbolic"));
+    g_menu_item_set_attribute (item_speed_reset, "icon", "s", "media-skip-forward-symbolic");
     g_menu_append_item (playback, item_speed_reset);
     g_object_unref (item_speed_reset);
     g_menu_append_section (menu, "Playback", G_MENU_MODEL (playback));
@@ -297,19 +297,19 @@ vlx_window_setup_actions_and_menu (VlxWindow *self)
     /* — View section — */
     GMenu *view = g_menu_new ();
     GMenuItem *item_toggle_queue = g_menu_item_new ("Toggle Queue", "win.toggle-queue");
-    g_menu_item_set_icon (item_toggle_queue, g_themed_icon_new ("view-list-symbolic"));
+    g_menu_item_set_attribute (item_toggle_queue, "icon", "s", "view-list-symbolic");
     g_menu_append_item (view, item_toggle_queue);
     g_object_unref (item_toggle_queue);
     GMenuItem *item_fullscreen = g_menu_item_new ("Fullscreen", "win.fullscreen");
-    g_menu_item_set_icon (item_fullscreen, g_themed_icon_new ("view-fullscreen-symbolic"));
+    g_menu_item_set_attribute (item_fullscreen, "icon", "s", "view-fullscreen-symbolic");
     g_menu_append_item (view, item_fullscreen);
     g_object_unref (item_fullscreen);
     GMenuItem *item_pip = g_menu_item_new ("Picture-in-Picture", "win.pip");
-    g_menu_item_set_icon (item_pip, g_themed_icon_new ("video-display-symbolic"));
+    g_menu_item_set_attribute (item_pip, "icon", "s", "video-display-symbolic");
     g_menu_append_item (view, item_pip);
     g_object_unref (item_pip);
     GMenuItem *item_screenshot = g_menu_item_new ("Screenshot", "win.screenshot");
-    g_menu_item_set_icon (item_screenshot, g_themed_icon_new ("camera-photo-symbolic"));
+    g_menu_item_set_attribute (item_screenshot, "icon", "s", "camera-photo-symbolic");
     g_menu_append_item (view, item_screenshot);
     g_object_unref (item_screenshot);
     g_menu_append_section (menu, "View", G_MENU_MODEL (view));
@@ -318,15 +318,15 @@ vlx_window_setup_actions_and_menu (VlxWindow *self)
     /* — Tools section — */
     GMenu *tools = g_menu_new ();
     GMenuItem *item_media_info = g_menu_item_new ("Media Info", "win.media-info");
-    g_menu_item_set_icon (item_media_info, g_themed_icon_new ("dialog-information-symbolic"));
+    g_menu_item_set_attribute (item_media_info, "icon", "s", "dialog-information-symbolic");
     g_menu_append_item (tools, item_media_info);
     g_object_unref (item_media_info);
     GMenuItem *item_clear_history = g_menu_item_new ("Clear Watch History", "win.clear-history");
-    g_menu_item_set_icon (item_clear_history, g_themed_icon_new ("edit-clear-history-symbolic"));
+    g_menu_item_set_attribute (item_clear_history, "icon", "s", "edit-clear-history-symbolic");
     g_menu_append_item (tools, item_clear_history);
     g_object_unref (item_clear_history);
     GMenuItem *item_preferences = g_menu_item_new ("Preferences…", "win.preferences");
-    g_menu_item_set_icon (item_preferences, g_themed_icon_new ("preferences-system-symbolic"));
+    g_menu_item_set_attribute (item_preferences, "icon", "s", "preferences-system-symbolic");
     g_menu_append_item (tools, item_preferences);
     g_object_unref (item_preferences);
     g_menu_append_section (menu, "Tools", G_MENU_MODEL (tools));
@@ -335,7 +335,7 @@ vlx_window_setup_actions_and_menu (VlxWindow *self)
     /* — Help section — */
     GMenu *help = g_menu_new ();
     GMenuItem *item_shortcuts = g_menu_item_new ("Keyboard Shortcuts", "win.shortcuts");
-    g_menu_item_set_icon (item_shortcuts, g_themed_icon_new ("preferences-desktop-keyboard-shortcuts-symbolic"));
+    g_menu_item_set_attribute (item_shortcuts, "icon", "s", "preferences-desktop-keyboard-shortcuts-symbolic");
     g_menu_append_item (help, item_shortcuts);
     g_object_unref (item_shortcuts);
     g_menu_append_section (menu, NULL, G_MENU_MODEL (help));
