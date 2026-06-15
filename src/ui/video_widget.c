@@ -59,7 +59,8 @@ update_texture_idle (gpointer data)
         if (self->screenshot_path) {
             GError *err = NULL;
             if (!gdk_texture_save_to_png (tex, self->screenshot_path)) {
-                VLX_LOG_ERROR (VLX_LOG_DOMAIN_UI, "Failed to save screenshot");
+                VLX_LOG_ERROR (VLX_LOG_DOMAIN_UI, "Failed to save screenshot: %s", err ? err->message : "unknown error");
+                g_clear_error (&err);
             } else {
                 VLX_LOG_INFO (VLX_LOG_DOMAIN_UI, "Saved screenshot to %s", self->screenshot_path);
             }
@@ -229,8 +230,10 @@ vlx_video_widget_take_screenshot (VlxVideoWidget *self, const gchar *path)
     
     /* If we already have a texture, save it immediately */
     if (self->current_texture) {
+        GError *err = NULL;
         if (!gdk_texture_save_to_png (self->current_texture, path)) {
-            VLX_LOG_ERROR (VLX_LOG_DOMAIN_UI, "Failed to save screenshot immediately");
+            VLX_LOG_ERROR (VLX_LOG_DOMAIN_UI, "Failed to save screenshot immediately: %s", err ? err->message : "unknown error");
+            g_clear_error (&err);
         } else {
             VLX_LOG_INFO (VLX_LOG_DOMAIN_UI, "Saved screenshot to %s immediately", path);
         }

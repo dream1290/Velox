@@ -323,6 +323,7 @@ vlx_event_bus_emit_chapters_updated (VlxEventBus *bus, const GArray *chapters_us
         }
     }
     GVariant *v = g_variant_builder_end (&builder);
+    g_variant_ref_sink (v);
     g_signal_emit (bus, signals[SIGNAL_CHAPTERS_UPDATED], 0, v);
     g_variant_unref (v);
 }

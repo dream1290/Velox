@@ -84,7 +84,6 @@ meta_worker (gpointer data)
         guint year   = 0;
         gst_tag_list_get_uint (tags, GST_TAG_DATE, &year);
         info->year = (gint) year;
-        gst_tag_list_unref ((GstTagList *) tags);
     }
 
     /* Stream info */
@@ -152,5 +151,5 @@ vlx_metadata_read_async (const gchar        *uri,
     req->callback     = callback;
     req->user_data    = user_data;
 
-    vlx_thread_pool_push (meta_worker, meta_complete, NULL, req, NULL);
+    vlx_thread_pool_push (meta_worker, meta_complete, req, req, NULL);
 }

@@ -114,12 +114,6 @@ executable('velox',
 # ── Data files ──────────────────────────────────────────────────────────────
 subdir('data')
 
-# ── Shaders ──────────────────────────────────────────────────────────────────
-install_data(
-  files('shaders/video.vert', 'shaders/video.frag'),
-  install_dir : join_paths(get_option('datadir'), 'velox', 'shaders'),
-)
-
 
 # ── Tests (stub) ─────────────────────────────────────────────────────────────
 # subdir('tests')
